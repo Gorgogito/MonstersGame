@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RollForward>Major</RollForward>
+    <RootNamespace>MonstersGame</RootNamespace>
+    <AssemblyName>MonstersGame</AssemblyName>
+    <!-- La fuente y los placeholders geometricos se generan en tiempo de
+         ejecucion; el arte de cartas/atributos/nivel (Data\Art) son PNG (y,
+         desde el Bloque 17, tambien JPEG para el reverso real de carta)
+         reales cargados con Texture2D.FromStream. En ningun caso se usa el
+         Content Pipeline (mgcb): se carga directo, sin compilar a .xnb. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.1.303" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MonstersGame.Core\MonstersGame.Core.csproj" />
+    <ProjectReference Include="..\MonstersGame.Data\MonstersGame.Data.csproj" />
+  </ItemGroup>
+
+  <!-- Los datos del juego (cartas, mazos, fusiones) viven en una base SQLite
+       unica desde el Bloque 9; se copia al directorio de salida para que los
+       loaders la lean en tiempo de ejecucion. -->
+  <ItemGroup>
+    <Content Include="Data\monstersgame.db">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Arte de cartas (Bloque 11): imagen por carta, insignia por Atributo, y
+       la estrella de Nivel, repetida tantas veces como el Nivel indique.
+       El reverso real de carta (Bloque 17, CardBack.jpg) es el unico JPEG del
+       catalogo, de ahi el segundo patron, ademas del de PNG. -->
+  <ItemGroup>
+    <Content Include="Data\Art\**\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Data\Art\**\*.jpg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

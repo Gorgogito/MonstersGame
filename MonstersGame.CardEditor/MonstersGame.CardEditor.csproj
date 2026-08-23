@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>MonstersGame.CardEditor</RootNamespace>
+    <AssemblyName>MonstersGame.CardEditor</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MonstersGame.Core\MonstersGame.Core.csproj" />
+    <ProjectReference Include="..\MonstersGame.Data\MonstersGame.Data.csproj" />
+  </ItemGroup>
+
+</Project>

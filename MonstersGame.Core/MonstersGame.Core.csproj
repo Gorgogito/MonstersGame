@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MonstersGame.Core</RootNamespace>
+    <!-- Biblioteca de reglas pura: sin dependencia de MonoGame ni de ningun
+         framework de UI. La referencian el juego, el editor de cartas y las
+         pruebas por igual. -->
+  </PropertyGroup>
+
+</Project>
