@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GodotGame.Core\GodotGame.Core.csproj" />
+    <ProjectReference Include="..\GodotGame.Data\GodotGame.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- EffectDefinitionResolver es un catalogo estatico global (mismo patron
+         que el EffectRegistry legacy); estas pruebas lo mutan temporalmente
+         para probar composicion de efectos. parallelizeTestCollections=false
+         evita que una clase de test corriendo en paralelo lea ese catalogo a
+         mitad de la mutacion de otra. -->
+    <None Update="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

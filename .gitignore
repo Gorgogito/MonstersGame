@@ -10,3 +10,9 @@ obj/
 # Rider / VS Code
 .idea/
 .vscode/
+
+# Godot (godotgame/GodotGame) -- cache/import, regenerado por el editor;
+# tambien redirige aqui el bin/obj del proyecto Godot (ver Sdk.props de
+# Godot.NET.Sdk), asi que ya cubre eso sin duplicar la regla de arriba.
+.godot/
+export_presets.cfg

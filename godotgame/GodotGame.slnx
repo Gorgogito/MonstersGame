@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="GodotGame.Core/GodotGame.Core.csproj" />
+  <Project Path="GodotGame.Data/GodotGame.Data.csproj" />
+  <Project Path="GodotGame.Editor/GodotGame.Editor.csproj">
+    <BuildType Project="Debug" />
+  </Project>
+  <Project Path="GodotGame.Tests/GodotGame.Tests.csproj" />
+  <Project Path="GodotGame/GodotGame.csproj" />
+</Solution>

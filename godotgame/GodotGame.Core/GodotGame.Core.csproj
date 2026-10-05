@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>GodotGame.Core</RootNamespace>
+    <!-- Biblioteca de reglas pura: sin dependencia de Godot (GodotSharp) ni de
+         ningun otro framework de UI/motor. La referencian el juego, el editor
+         de cartas y las pruebas por igual. net8.0 porque es el TargetFramework
+         que exige GodotSharp 4.7.2 (verificado en su .nuspec). -->
+  </PropertyGroup>
+
+</Project>

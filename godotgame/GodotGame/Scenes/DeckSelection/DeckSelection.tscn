@@ -1,0 +1,81 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://Scenes/DeckSelection/DeckSelection.cs" id="1"]
+
+[node name="DeckSelection" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Main" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+offset_left = 20.0
+offset_top = 16.0
+offset_right = -20.0
+offset_bottom = -16.0
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Main"]
+layout_mode = 2
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 28
+text = "SELECCION DE MAZO"
+
+[node name="Hint" type="Label" parent="Main"]
+layout_mode = 2
+horizontal_alignment = 1
+text = "Elegi tu mazo. La CPU recibira uno automaticamente."
+
+[node name="Content" type="HBoxContainer" parent="Main"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="DeckList" type="ItemList" parent="Main/Content"]
+custom_minimum_size = Vector2(320, 0)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="PreviewPane" type="VBoxContainer" parent="Main/Content"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="PreviewHeader" type="Label" parent="Main/Content/PreviewPane"]
+layout_mode = 2
+text = "..."
+
+[node name="CardList" type="ItemList" parent="Main/Content/PreviewPane"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Bottom" type="HBoxContainer" parent="Main"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="BackButton" type="Button" parent="Main/Bottom"]
+layout_mode = 2
+text = "VOLVER (ESC)"
+
+[node name="StartButton" type="Button" parent="Main/Bottom"]
+layout_mode = 2
+text = "COMENZAR DUELO"
+
+[node name="StatusLabel" type="Label" parent="Main/Bottom"]
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 2
+
+[connection signal="item_selected" from="Main/Content/DeckList" to="." method="OnDeckSelected"]
+[connection signal="item_activated" from="Main/Content/DeckList" to="." method="OnDeckActivated"]
+[connection signal="pressed" from="Main/Bottom/BackButton" to="." method="OnBackPressed"]
+[connection signal="pressed" from="Main/Bottom/StartButton" to="." method="OnStartPressed"]
