@@ -116,8 +116,31 @@ public partial class EffectChoicePanel : Control
             ButtonRow().AddChild(UiKit.MenuButton("CANCELAR", onCancel, 200f));
     }
 
-    /// <summary>Elegir entre <paramref name="min"/> y <paramref name="max"/> cartas.</summary>
-    public void ShowCards(object key, string title, string prompt, IReadOnlyList<CardRef> candidates, int min, int max, Action<int[]> onConfirm)
+    /// <summary>Muestra cartas que estaban ocultas (mano rival, carta excavada) hasta que el jugador acepta.</summary>
+    public void ShowReveal(object key, string title, string prompt, IReadOnlyList<CardRef> cards, Action onAccept)
+    {
+        Begin(key, title, prompt);
+        var tiles = new HBoxContainer();
+        tiles.AddThemeConstantOverride("separation", 8);
+        var scroll = new ScrollContainer
+        {
+            CustomMinimumSize = new Vector2(Math.Min(940, Math.Max(680, cards.Count * 142)), 232),
+            VerticalScrollMode = ScrollContainer.ScrollMode.Disabled
+        };
+        scroll.AddChild(tiles);
+        _body.AddChild(scroll);
+        foreach (var card in cards)
+        {
+            var tile = BuildTile(card, hidden: false);
+            tile.MouseEntered += () => _onHover?.Invoke(card.Card);
+            tiles.AddChild(tile);
+        }
+        if (cards.Count == 0) _body.AddChild(UiKit.Text("(no hay cartas)", 15));
+        ButtonRow().AddChild(UiKit.MenuButton("ACEPTAR", onAccept, 220f));
+    }
+
+    /// <summary>Elegir entre <paramref name="min"/> y <paramref name="max"/> cartas. <paramref name="reveal"/> = mostrar boca arriba incluso las de la mano rival.</summary>
+    public void ShowCards(object key, string title, string prompt, IReadOnlyList<CardRef> candidates, int min, int max, Action<int[]> onConfirm, bool reveal = false)
     {
         Begin(key, title, prompt);
         var selected = new List<int>();
@@ -151,7 +174,7 @@ public partial class EffectChoicePanel : Control
         {
             int captured = i;
             var candidate = candidates[i];
-            bool hidden = candidate.Side == PlayerSide.Cpu && candidate.Zone is CardZone.Hand or CardZone.Deck;
+            bool hidden = !reveal && candidate.Side == PlayerSide.Cpu && candidate.Zone is CardZone.Hand or CardZone.Deck;
             var tile = BuildTile(candidate, hidden);
             tile.Pressed += () =>
             {

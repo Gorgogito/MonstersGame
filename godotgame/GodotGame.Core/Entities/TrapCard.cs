@@ -1,6 +1,6 @@
 namespace GodotGame.Core.Entities;
 
-/// <summary>Carta de Trampa. Igual que <see cref="SpellCard"/>, sin efectos aun (Bloque 5).</summary>
+/// <summary>Carta de Trampa. Igual que <see cref="SpellCard"/>: efectos por datos (<see cref="Card.Effects"/>) o un <see cref="EffectId"/> heredado.</summary>
 public sealed class TrapCard : Card
 {
     public override CardKind Kind => CardKind.Trap;
@@ -17,8 +17,9 @@ public sealed class TrapCard : Card
     /// <summary>Clave del efecto asociado, resoluble por datos externos.</summary>
     public string EffectId { get; }
 
-    public TrapCard(int id, string name, TrapSubType subType, string effectId = "", string image = "", string description = "")
-        : base(id, name, image, description)
+    public TrapCard(int id, string name, TrapSubType subType, string effectId = "", string image = "", string description = "",
+        IReadOnlyList<GodotGame.Core.Effects.Monster.MonsterEffect>? effects = null)
+        : base(id, name, image, description, effects)
     {
         SubType = subType;
         EffectId = effectId ?? string.Empty;

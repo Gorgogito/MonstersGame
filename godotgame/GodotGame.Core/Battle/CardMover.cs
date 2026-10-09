@@ -48,8 +48,12 @@ public static class CardMover
         return index >= 0 ? card with { Index = index } : null;
     }
 
-    /// <summary>Saca la carta de su zona actual (sin eventos). Devuelve el dueño real, o null si ya no estaba.</summary>
-    private static PlayerSide? Detach(DuelState state, CardRef card, out CardInstance? monster)
+    /// <summary>
+    /// Saca la carta de su zona actual. Devuelve el dueño real, o null si ya no
+    /// estaba. Si la carta estaba en el Campo registra el evento "deja el
+    /// Campo" (con como habia sido Invocada y si la controlaba su dueño).
+    /// </summary>
+    private static PlayerSide? Detach(DuelState state, CardRef card, out CardInstance? monster, MoveCause? cause = null, CardZone to = CardZone.Graveyard)
     {
         monster = null;
         var located = Locate(state, card);
@@ -63,17 +67,29 @@ public static class CardMover
             case CardZone.Graveyard: player.Graveyard.RemoveAt(located.Index); return located.Side;
             case CardZone.Banished: player.Banished.RemoveAt(located.Index); return located.Side;
             case CardZone.MonsterZone:
+            {
                 monster = player.MonsterZones[located.Index];
                 player.MonsterZones[located.Index] = null;
                 EquipCleanup.DetachEquipsTargeting(state, located.Side, located.Index);
-                return monster?.Owner ?? located.Side;
+                var owner = monster?.Owner ?? located.Side;
+                if (cause is { } leaveCause)
+                    state.TriggerEvents.Add(new TriggerEvent(EffectEvent.LeavesField, card.Card, owner, CardZone.MonsterZone, to, leaveCause,
+                        monster?.SummonMethod, monster?.Owner == null));
+                return owner;
+            }
             case CardZone.SpellTrapZone:
+            {
                 var spellTrap = player.SpellTrapZones[located.Index];
                 player.SpellTrapZones[located.Index] = null;
                 if (spellTrap != null) RemoveEquipModifiers(state, spellTrap);
+                if (cause is { } leaveCause)
+                    state.TriggerEvents.Add(new TriggerEvent(EffectEvent.LeavesField, card.Card, located.Side, CardZone.SpellTrapZone, to, leaveCause));
                 return located.Side;
+            }
             case CardZone.FieldZone:
                 player.FieldZone = null;
+                if (cause is { } fieldCause)
+                    state.TriggerEvents.Add(new TriggerEvent(EffectEvent.LeavesField, card.Card, located.Side, CardZone.FieldZone, to, fieldCause));
                 return located.Side;
             default: return null;
         }
@@ -94,10 +110,11 @@ public static class CardMover
     /// </summary>
     public static bool SendToGraveyard(DuelState state, CardRef card, MoveCause cause, bool discard = false, bool destroy = false)
     {
-        var owner = Detach(state, card, out _);
+        var owner = Detach(state, card, out _, cause, CardZone.Graveyard);
         if (owner == null) return false;
 
         state.GetPlayer(owner.Value).Graveyard.Add(card.Card);
+        state.SentToGraveyardThisTurn.Add(card.Card);
         var to = CardZone.Graveyard;
         Record(state, EffectEvent.SentToGraveyard, card, owner.Value, to, cause);
 
@@ -124,7 +141,7 @@ public static class CardMover
     /// <summary>Destierra la carta (al Destierro de su dueño).</summary>
     public static bool Banish(DuelState state, CardRef card, MoveCause cause)
     {
-        var owner = Detach(state, card, out _);
+        var owner = Detach(state, card, out _, cause, CardZone.Banished);
         if (owner == null) return false;
 
         state.GetPlayer(owner.Value).Banished.Add(card.Card);
@@ -138,7 +155,7 @@ public static class CardMover
     /// <summary>Añade la carta a la mano de su dueño (desde el Deck, Cementerio, Destierro o el Campo).</summary>
     public static bool AddToHand(DuelState state, CardRef card, MoveCause cause)
     {
-        var owner = Detach(state, card, out _);
+        var owner = Detach(state, card, out _, cause, CardZone.Hand);
         if (owner == null) return false;
         state.GetPlayer(owner.Value).Hand.Add(card.Card);
         return true;
@@ -147,11 +164,45 @@ public static class CardMover
     /// <summary>Pone la carta en la parte inferior del Deck de su dueño.</summary>
     public static bool ToDeckBottom(DuelState state, CardRef card, MoveCause cause)
     {
-        var owner = Detach(state, card, out _);
+        var owner = Detach(state, card, out _, cause, CardZone.Deck);
         if (owner == null) return false;
         state.GetPlayer(owner.Value).Deck.Add(card.Card);
         return true;
     }
+
+    /// <summary>Pone la carta en la parte superior del Deck de su dueño (se roba primero).</summary>
+    public static bool ToDeckTop(DuelState state, CardRef card, MoveCause cause)
+    {
+        var owner = Detach(state, card, out _, cause, CardZone.Deck);
+        if (owner == null) return false;
+        state.GetPlayer(owner.Value).Deck.Insert(0, card.Card);
+        return true;
+    }
+
+    /// <summary>
+    /// Coloca boca abajo una Magia/Trampa (desde la mano, el Deck o el
+    /// Cementerio) en una Zona de Magia/Trampa libre de su dueño. Devuelve la
+    /// zona usada o -1. Como cualquier carta Colocada, no puede activarse en
+    /// este mismo turno si es una Trampa o una Magia de Juego Rapido.
+    /// </summary>
+    public static int SetSpellTrap(DuelState state, CardRef card, MoveCause cause)
+    {
+        if (card.Card is not (SpellCard or TrapCard)) return -1;
+        if (card.Card is SpellCard { SubType: SpellSubType.Field }) return -1;
+        var owner = OwnerOf(state, card);
+        var player = state.GetPlayer(owner);
+        if (player.FirstFreeSpellTrapZone() == -1) return -1;
+        if (Detach(state, card, out _, cause, CardZone.SpellTrapZone) == null) return -1;
+        int zone = player.FirstFreeSpellTrapZone();
+        player.SpellTrapZones[zone] = new SpellTrapInstance(card.Card, faceUp: false) { SetThisTurn = true };
+        return zone;
+    }
+
+    /// <summary>Quien realiza una Invocacion: el que controla el efecto/accion, o el lado al que va el monstruo.</summary>
+    private static PlayerSide Summoner(MoveCause cause, PlayerSide toSide) => cause.By ?? toSide;
+
+    /// <summary>Verdadero si <paramref name="summoner"/> tiene prohibido Invocar este turno ("no puedes Invocar monstruos ...").</summary>
+    public static bool SummonLocked(DuelState state, PlayerSide summoner) => state.GetPlayer(summoner).CannotSummonThisTurn;
 
     /// <summary>
     /// Invoca de Modo Especial la carta (debe ser un Monstruo) al Campo de
@@ -161,12 +212,13 @@ public static class CardMover
     public static int SpecialSummon(DuelState state, CardRef card, PlayerSide toSide, BattlePosition position, MoveCause cause)
     {
         if (card.Card is not MonsterCard monster) return -1;
+        if (SummonLocked(state, Summoner(cause, toSide))) return -1;
         var target = state.GetPlayer(toSide);
         int zone = target.FirstFreeMonsterZone();
         if (zone == -1) return -1;
 
         // Si la carta esta en el Campo propio y se reinvoca, liberar su zona primero.
-        var owner = Detach(state, card, out _);
+        var owner = Detach(state, card, out _, cause, CardZone.MonsterZone);
         if (owner == null) return -1;
         zone = target.FirstFreeMonsterZone();
         if (zone == -1) return -1;
@@ -174,11 +226,30 @@ public static class CardMover
         target.MonsterZones[zone] = new CardInstance(monster, position)
         {
             SummonedThisTurn = true,
-            Owner = owner.Value != toSide ? owner.Value : null
+            Owner = owner.Value != toSide ? owner.Value : null,
+            SummonMethod = SummonMethod.Special
         };
+        state.GetPlayer(Summoner(cause, toSide)).HasSummonedThisTurn = true;
 
         RecordSummon(state, monster, toSide, zone, card.Zone, cause, EffectEvent.SpecialSummoned);
         state.Events.Enqueue(new MonsterSummonedEvent(toSide, zone, monster, SummonKind.Special));
+        return zone;
+    }
+
+    /// <summary>
+    /// Invoca de Modo Especial un monstruo que no estaba en ninguna zona del
+    /// duelo (ej. "Invoca por Fusion, desde tu Deck Extra, ..."): en este
+    /// juego los Monstruos de Fusion salen de las recetas, no de un mazo.
+    /// </summary>
+    public static int SummonFromOutside(DuelState state, MonsterCard monster, PlayerSide toSide, BattlePosition position, MoveCause cause, SummonMethod method)
+    {
+        if (SummonLocked(state, Summoner(cause, toSide))) return -1;
+        var target = state.GetPlayer(toSide);
+        int zone = target.FirstFreeMonsterZone();
+        if (zone == -1) return -1;
+        target.MonsterZones[zone] = new CardInstance(monster, position) { SummonedThisTurn = true, SummonMethod = method };
+        state.GetPlayer(Summoner(cause, toSide)).HasSummonedThisTurn = true;
+        RecordSummon(state, monster, toSide, zone, CardZone.Deck, cause, EffectEvent.SpecialSummoned);
         return zone;
     }
 

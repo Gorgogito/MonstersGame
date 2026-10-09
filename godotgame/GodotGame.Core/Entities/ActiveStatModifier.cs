@@ -12,6 +12,9 @@ public sealed class ActiveStatModifier
 {
     public int AttackAmount { get; }
     public int DefenseAmount { get; }
+
+    /// <summary>Niveles ganados (o perdidos) por un efecto ("esta carta gana 1 Nivel").</summary>
+    public int LevelAmount { get; init; }
     public ModifierDuration Duration { get; }
 
     /// <summary>Solo relevante si <see cref="Duration"/> es <see cref="ModifierDuration.ForNTurns"/>: cuantas Fases Finales del controlador le quedan.</summary>

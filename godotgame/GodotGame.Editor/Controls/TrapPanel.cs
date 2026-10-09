@@ -1,4 +1,5 @@
 using Godot;
+using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Entities;
 using GodotGame.Data.Loaders;
 using GodotGame.Editor.Data;
@@ -6,14 +7,15 @@ using GodotGame.Editor.Data;
 namespace GodotGame.Editor.Controls;
 
 /// <summary>
-/// Panel de propiedades de una carta Trampa: SubType y Efecto. Adaptacion
-/// Godot de <c>TrapPanel</c> de MonstersGame.CardEditor -- el mas simple de
-/// los tres, sin sub-panel condicional propio.
+/// Panel de propiedades de una carta Trampa: subtipo (con su explicacion), el
+/// efecto heredado y los efectos por datos de la carta.
 /// </summary>
 public sealed partial class TrapPanel : VBoxContainer
 {
     private readonly OptionButton _subTypeCombo = new();
+    private readonly Label _subTypeHelp = EditorLayout.Hint("");
     private readonly OptionButton _effectCombo = new() { FitToLongestItem = false, ClipText = true };
+    private readonly MonsterEffectsEditor _effectsEditor;
 
     private bool _suppressEvents;
 
@@ -28,19 +30,39 @@ public sealed partial class TrapPanel : VBoxContainer
         }
     }
 
-    public TrapPanel()
+    public TrapPanel(EffectEditorContext effectContext)
     {
-        var layout = EditorLayout.TwoColumnLayout();
-        EditorLayout.AddRow(layout, "SubType", _subTypeCombo);
-        EditorLayout.AddRow(layout, "Efecto", _effectCombo);
-        AddChild(layout);
+        AddThemeConstantOverride("separation", 8);
+        _effectsEditor = new MonsterEffectsEditor(effectContext, CardKind.Trap);
 
-        foreach (string name in Enum.GetNames<TrapSubType>()) _subTypeCombo.AddItem(name);
+        var layout = EditorLayout.TwoColumnLayout();
+        EditorLayout.AddRow(layout, "Subtipo", _subTypeCombo);
+        EditorLayout.AddRow(layout, "Efecto heredado (antiguo)", _effectCombo);
+        AddChild(layout);
+        _subTypeHelp.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        AddChild(_subTypeHelp);
+
+        var effectsSection = EditorLayout.Section("Efectos de la carta", out var effectsBody);
+        effectsBody.AddChild(_effectsEditor);
+        AddChild(effectsSection);
+
+        foreach (var subType in SpellTrapCatalog.TrapSubTypes)
+        {
+            _subTypeCombo.AddItem(subType.Label);
+            _subTypeCombo.SetItemMetadata(_subTypeCombo.ItemCount - 1, subType.Value.ToString());
+        }
         foreach (var option in EffectCatalog.Options) _effectCombo.AddItem(option.Label);
 
-        _subTypeCombo.ItemSelected += _ => RaiseChanged();
+        _subTypeCombo.ItemSelected += _ => { UpdateHelp(); RaiseChanged(); };
         _effectCombo.ItemSelected += _ => RaiseChanged();
+        _effectsEditor.Changed += RaiseChanged;
     }
+
+    private string SelectedSubType() =>
+        _subTypeCombo.Selected >= 0 ? _subTypeCombo.GetItemMetadata(_subTypeCombo.Selected).AsString() : nameof(TrapSubType.Normal);
+
+    private void UpdateHelp() =>
+        _subTypeHelp.Text = SpellTrapCatalog.TrapSubTypes.FirstOrDefault(s => s.Value.ToString() == SelectedSubType())?.Description ?? "";
 
     private void RaiseChanged()
     {
@@ -51,24 +73,22 @@ public sealed partial class TrapPanel : VBoxContainer
     {
         _suppressEvents = true;
 
-        SelectComboText(_subTypeCombo, dto.SubType);
+        _subTypeCombo.Selected = 0;
+        for (int i = 0; i < _subTypeCombo.ItemCount; i++)
+            if (string.Equals(_subTypeCombo.GetItemMetadata(i).AsString(), dto.SubType, StringComparison.OrdinalIgnoreCase)) _subTypeCombo.Selected = i;
         string effectIdForCombo = dto.Kind == "Trap" && dto.ComposeCustomEffect ? EffectCatalog.ComposeNew.Id : dto.EffectId;
         SelectEffectOption(_effectCombo, dto.Kind == "Trap" ? effectIdForCombo : dto.EffectId);
+        _effectsEditor.LoadFrom(dto.Kind == "Trap" ? dto.MonsterEffects : new List<MonsterEffectDto>());
+        UpdateHelp();
 
         _suppressEvents = false;
     }
 
     public void ApplyTo(CardDto dto)
     {
-        dto.SubType = _subTypeCombo.Selected >= 0 ? _subTypeCombo.GetItemText(_subTypeCombo.Selected) : "Normal";
+        dto.SubType = SelectedSubType();
         dto.EffectId = SelectedEffectId;
-    }
-
-    private static void SelectComboText(OptionButton combo, string text)
-    {
-        for (int i = 0; i < combo.ItemCount; i++)
-            if (combo.GetItemText(i) == text) { combo.Selected = i; return; }
-        combo.Selected = combo.ItemCount > 0 ? 0 : -1;
+        dto.MonsterEffects = _effectsEditor.GetEffects();
     }
 
     private static void SelectEffectOption(OptionButton combo, string effectId)

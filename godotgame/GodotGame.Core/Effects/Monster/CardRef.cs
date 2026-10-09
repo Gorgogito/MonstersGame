@@ -12,12 +12,12 @@ public sealed record CardRef(Card Card, PlayerSide Side, CardZone Zone, int Inde
 {
     /// <summary>La instancia de Monstruo, si la carta esta en una Zona de Monstruos.</summary>
     public CardInstance? MonsterInstance(DuelState state) =>
-        Zone == CardZone.MonsterZone ? state.GetPlayer(Side).MonsterZones[Index] : null;
+        Zone == CardZone.MonsterZone && Index >= 0 && Index < Player.MonsterZoneCount ? state.GetPlayer(Side).MonsterZones[Index] : null;
 
     /// <summary>La instancia de Magia/Trampa, si la carta esta en una Zona de Magia/Trampa o del Campo.</summary>
     public SpellTrapInstance? SpellTrapInstance(DuelState state) => Zone switch
     {
-        CardZone.SpellTrapZone => state.GetPlayer(Side).SpellTrapZones[Index],
+        CardZone.SpellTrapZone when Index >= 0 && Index < Player.SpellTrapZoneCount => state.GetPlayer(Side).SpellTrapZones[Index],
         CardZone.FieldZone => state.GetPlayer(Side).FieldZone,
         _ => null
     };

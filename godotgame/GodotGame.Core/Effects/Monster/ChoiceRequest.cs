@@ -11,7 +11,10 @@ public enum ChoiceKind
     SelectCards,
 
     /// <summary>Elegir una de <see cref="ChoiceRequest.Options"/> (ej. en que Campo Invocar, en que posicion).</summary>
-    SelectOption
+    SelectOption,
+
+    /// <summary>Solo mostrar cartas que estaban ocultas (la mano rival, una carta excavada) hasta que el jugador las vea: se responde con "Aceptar".</summary>
+    Reveal
 }
 
 /// <summary>
@@ -38,6 +41,19 @@ public sealed class ChoiceRequest
     public IReadOnlyList<string> Options { get; }
     public ChoicePurpose Purpose { get; }
 
+    /// <summary>
+    /// Verdadero si las cartas candidatas se muestran boca arriba aunque sean
+    /// de la mano rival (ej. "cada jugador elige 1 carta de la mano de su
+    /// adversario" despues de mostrar las manos).
+    /// </summary>
+    public bool RevealCandidates { get; set; }
+
+    /// <summary>
+    /// Verdadero si es la ventana de respuesta a un ataque (la opcion 0 es
+    /// "No activar nada"; el resto, cartas o efectos que se pueden activar).
+    /// </summary>
+    public bool IsResponseWindow { get; set; }
+
     public bool Answered { get; private set; }
     public bool Yes { get; private set; }
     public IReadOnlyList<int> Selected { get; private set; } = Array.Empty<int>();
@@ -63,6 +79,10 @@ public sealed class ChoiceRequest
     public static ChoiceRequest Pick(PlayerSide chooser, string prompt, Card? source, IReadOnlyList<string> options) =>
         new(ChoiceKind.SelectOption, chooser, prompt, source, null, 0, 0, options, ChoicePurpose.Neutral);
 
+    /// <summary>Muestra cartas a <paramref name="viewer"/> (boca arriba) hasta que las acepte.</summary>
+    public static ChoiceRequest Reveal(PlayerSide viewer, string prompt, Card? source, IReadOnlyList<CardRef> cards) =>
+        new(ChoiceKind.Reveal, viewer, prompt, source, cards, 0, 0, null, ChoicePurpose.Neutral) { RevealCandidates = true };
+
     public static ChoiceRequest Cards(PlayerSide chooser, string prompt, Card? source, IReadOnlyList<CardRef> candidates, int min, int max, ChoicePurpose purpose)
     {
         max = Math.Min(max, candidates.Count);
@@ -75,6 +95,8 @@ public sealed class ChoiceRequest
 
     /// <summary>Verdadero si no hay nada que decidir (se responde sola sin preguntarle a nadie).</summary>
     public bool IsForced => Kind == ChoiceKind.SelectCards && (Max == 0 || Candidates.Count <= Min);
+
+    public void Acknowledge() => Answered = true;
 
     public void AnswerYesNo(bool yes) { Yes = yes; Answered = true; }
 

@@ -30,10 +30,12 @@ public sealed class EffectStep
 }
 
 /// <summary>
-/// Un efecto de una carta de Monstruo, compuesto por datos (autorable desde
-/// el editor de cartas): tipo, cuando/desde donde se activa, condiciones,
-/// objetivos ("selecciona"), costos y pasos de accion. Un Monstruo puede
-/// tener varios (ver <see cref="Entities.MonsterCard.Effects"/>).
+/// Un efecto de una carta compuesto por datos (autorable desde el editor de
+/// cartas): tipo, cuando/desde donde se activa, condiciones, objetivos
+/// ("selecciona"), costos y pasos de accion. Lo usan los Monstruos
+/// (<see cref="Entities.MonsterCard.Effects"/>) y tambien las Magias y Trampas
+/// (<see cref="Entities.SpellCard.Effects"/>, <see cref="Entities.TrapCard.Effects"/>):
+/// una carta puede tener varios.
 /// </summary>
 public sealed class MonsterEffect
 {
@@ -66,6 +68,16 @@ public sealed class MonsterEffect
     /// <summary>Lo que hace el efecto al resolverse (o, si es Continuo, lo que aplica de forma pasiva).</summary>
     public IReadOnlyList<EffectStep> Steps { get; }
 
+    /// <summary>Solo Trigger: si el evento tiene que ocurrirle a esta carta o a otra que cumpla <see cref="EventFilter"/>.</summary>
+    public EventSubject Subject { get; }
+
+    /// <summary>
+    /// Solo Trigger con <see cref="EventSubject.AnyCard"/>: que carta tiene que
+    /// sufrir el evento (parametros de <see cref="CardQuery"/> sin zonas: lado,
+    /// clase, Tipo, nombre...). Null = cualquiera.
+    /// </summary>
+    public EffectActionParams? EventFilter { get; }
+
     public MonsterEffect(
         MonsterEffectType type,
         IReadOnlyList<EffectStep> steps,
@@ -76,21 +88,29 @@ public sealed class MonsterEffect
         string text = "",
         IReadOnlyList<StepCondition>? activationConditions = null,
         EffectActionParams? target = null,
-        IReadOnlyList<EffectStep>? costs = null)
+        IReadOnlyList<EffectStep>? costs = null,
+        EventSubject subject = EventSubject.ThisCard,
+        EffectActionParams? eventFilter = null)
     {
         Type = type;
         Steps = steps;
         TriggerEvent = type == MonsterEffectType.Flip ? EffectEvent.Flipped : triggerEvent;
-        Optional = type is MonsterEffectType.Ignition or MonsterEffectType.Quick or MonsterEffectType.Unclassified || (type == MonsterEffectType.Trigger && optional);
+        Optional = type is MonsterEffectType.Ignition or MonsterEffectType.Quick or MonsterEffectType.Unclassified or MonsterEffectType.Activation
+                   || (type == MonsterEffectType.Trigger && optional);
         ActivationZone = activationZone;
         OncePerTurn = oncePerTurn;
         Text = text ?? "";
         ActivationConditions = activationConditions ?? Array.Empty<StepCondition>();
         Target = target;
         Costs = costs ?? Array.Empty<EffectStep>();
+        Subject = type == MonsterEffectType.Trigger ? subject : EventSubject.ThisCard;
+        EventFilter = eventFilter;
     }
 
-    /// <summary>Velocidad de Hechizo con la que entra en la Cadena.</summary>
+    /// <summary>
+    /// Velocidad de Hechizo con la que entra en la Cadena. El efecto de
+    /// activacion de una Magia/Trampa usa la de su carta (ver <see cref="EffectActivation.SpellSpeed"/>).
+    /// </summary>
     public int SpellSpeed => Type == MonsterEffectType.Quick ? 2 : 1;
 
     /// <summary>Verdadero si se activa por un evento (Disparado o Volteo) en vez de manualmente.</summary>

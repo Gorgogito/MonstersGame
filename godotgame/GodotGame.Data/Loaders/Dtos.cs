@@ -71,9 +71,11 @@ public sealed class CardDto
     public string EffectVisualProfileKey { get; set; } = "";
 
     /// <summary>
-    /// Solo para Kind = "Monster": efectos de Monstruo compuestos por datos
-    /// (Continuo, de Encendido, Disparado, Rapido, de Volteo, No clasificado).
-    /// Ver <c>GodotGame.Core.Effects.Monster.MonsterEffect</c>.
+    /// Efectos compuestos por datos de la carta (el nombre se conserva por
+    /// compatibilidad: los usan Monstruos, Magias y Trampas). Monstruo:
+    /// Continuo, de Encendido, Disparado, Rapido, de Volteo, No clasificado.
+    /// Magia/Trampa: Al activar la carta, Continuo, de Encendido, Disparado,
+    /// Rapido. Ver <c>GodotGame.Core.Effects.Monster.MonsterEffect</c>.
     /// </summary>
     public List<MonsterEffectDto> MonsterEffects { get; set; } = new();
 }
@@ -81,10 +83,14 @@ public sealed class CardDto
 /// <summary>Forma de archivo de <c>GodotGame.Core.Effects.Monster.MonsterEffect</c>.</summary>
 public sealed class MonsterEffectDto
 {
-    /// <summary>Nombre de <c>MonsterEffectType</c>: Continuous, Ignition, Trigger, Quick, Flip o Unclassified.</summary>
+    /// <summary>Nombre de <c>MonsterEffectType</c>: Continuous, Ignition, Trigger, Quick, Flip, Unclassified o Activation (Magia/Trampa).</summary>
     public string Type { get; set; } = "Ignition";
     /// <summary>Solo Trigger: nombre de <c>EffectEvent</c>.</summary>
     public string TriggerEvent { get; set; } = "None";
+    /// <summary>Solo Trigger: nombre de <c>EventSubject</c> (ThisCard = "si esta carta ...", AnyCard = "si un monstruo ... ").</summary>
+    public string Subject { get; set; } = "ThisCard";
+    /// <summary>Solo Trigger con Subject = AnyCard: filtro de la carta que sufre el evento (parametros de <c>CardQuery</c>).</summary>
+    public Dictionary<string, string> EventFilter { get; set; } = new();
     /// <summary>Solo Trigger: "puedes" (opcional) u obligatorio.</summary>
     public bool Optional { get; set; }
     /// <summary>Encendido/Rapido/No clasificado: nombre de <c>EffectZone</c> (Field, Hand, Graveyard, Banished).</summary>

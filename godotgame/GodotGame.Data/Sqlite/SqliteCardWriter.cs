@@ -142,7 +142,7 @@ public sealed class SqliteCardWriter
         if (isMonster && dto.Category.Equals("Fusion", StringComparison.OrdinalIgnoreCase))
             SaveFusionRecipe(connection, dto);
 
-        SqliteMonsterEffectStore.Save(connection, dto.Id, isMonster ? dto.MonsterEffects : new List<MonsterEffectDto>());
+        SqliteMonsterEffectStore.Save(connection, dto.Id, dto.MonsterEffects);
     }
 
     private static void SaveFusionRecipe(SqliteConnection connection, CardDto dto)

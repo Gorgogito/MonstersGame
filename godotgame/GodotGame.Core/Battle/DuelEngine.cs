@@ -44,7 +44,8 @@ public sealed partial class DuelEngine
         {
             FirstPlayerIndex = firstPlayerIndex,
             ActiveIndex = firstPlayerIndex,
-            TurnNumber = 1
+            TurnNumber = 1,
+            Fusion = _fusion
         };
 
         human.LifePoints = _config.StartingLifePoints;
@@ -71,10 +72,18 @@ public sealed partial class DuelEngine
         player.HasNormalSummonedThisTurn = false;
         foreach (var zone in player.MonsterZones)
             zone?.ResetTurnFlags();
-        foreach (var zone in player.SpellTrapZones)
-            zone?.ResetTurnFlags();
-        player.FieldZone?.ResetTurnFlags();
+        // Las cartas Colocadas en el turno anterior (de cualquiera de los dos)
+        // ya se pueden activar: "no en el mismo turno en que se Colocaron".
+        foreach (var each in State.Players)
+        {
+            foreach (var zone in each.SpellTrapZones)
+                zone?.ResetTurnFlags();
+            each.FieldZone?.ResetTurnFlags();
+            each.HasSummonedThisTurn = false;
+            each.CannotSummonThisTurn = false;
+        }
         State.UsedOncePerTurn.Clear();
+        State.SentToGraveyardThisTurn.Clear();
 
         State.Phase = DuelPhase.Draw;
         Log.Add($"--- Turno {State.TurnNumber}: {player.Name} ---");
@@ -108,6 +117,8 @@ public sealed partial class DuelEngine
         if (!pendingCheck.Success) return pendingCheck;
         var chainCheck = ValidateNoOpenChain();
         if (!chainCheck.Success) return chainCheck;
+
+        if (_pendingAttack != null || _routines.Count > 0) return ActionResult.Fail("Espera a que termine lo que esta pasando.");
 
         switch (State.Phase)
         {
@@ -267,6 +278,8 @@ public sealed partial class DuelEngine
 
         if (player.HasNormalSummonedThisTurn)
             return ActionResult.Fail("Ya realizaste tu Invocacion Normal o Colocacion este turno.");
+        if (player.CannotSummonThisTurn)
+            return ActionResult.Fail("Un efecto te impide Invocar monstruos este turno (si puedes Colocar).");
 
         if (position == BattlePosition.DefenseFaceDown)
             return ActionResult.Fail("Usa SetMonster para Colocar boca abajo.");
@@ -281,9 +294,10 @@ public sealed partial class DuelEngine
             return ActionResult.Fail("No hay Zonas de Monstruo libres.");
 
         player.Hand.RemoveAt(handIndex);
-        var instance = new CardInstance(monster, position) { SummonedThisTurn = true };
+        var instance = new CardInstance(monster, position) { SummonedThisTurn = true, SummonMethod = SummonMethod.Normal };
         player.MonsterZones[freeZone] = instance;
         player.HasNormalSummonedThisTurn = true;
+        player.HasSummonedThisTurn = true;
 
         Log.Add($"{player.Name} invoca a {monster.Name} ({monster.Attack}/{monster.Defense}) en Ataque.");
         State.Events.Enqueue(new MonsterSummonedEvent(player.Side, freeZone, monster, SummonKind.Normal));
@@ -319,7 +333,7 @@ public sealed partial class DuelEngine
             return ActionResult.Fail("No hay Zonas de Monstruo libres.");
 
         player.Hand.RemoveAt(handIndex);
-        var instance = new CardInstance(monster, BattlePosition.DefenseFaceDown) { SummonedThisTurn = true };
+        var instance = new CardInstance(monster, BattlePosition.DefenseFaceDown) { SummonedThisTurn = true, SummonMethod = SummonMethod.Set };
         player.MonsterZones[freeZone] = instance;
         player.HasNormalSummonedThisTurn = true;
 
@@ -364,6 +378,8 @@ public sealed partial class DuelEngine
 
         if (player.HasNormalSummonedThisTurn)
             return ActionResult.Fail("Ya usaste tu jugada de monstruo este turno.");
+        if (player.CannotSummonThisTurn)
+            return ActionResult.Fail("Un efecto te impide Invocar monstruos este turno.");
 
         int freeZone = player.FirstFreeMonsterZone();
         if (freeZone == -1)
@@ -375,9 +391,10 @@ public sealed partial class DuelEngine
         CardMover.SendToGraveyard(State, new CardRef(player.Hand[hi], player.Side, CardZone.Hand, hi), MoveCause.Rule);
         CardMover.SendToGraveyard(State, new CardRef(player.Hand[lo], player.Side, CardZone.Hand, lo), MoveCause.Rule);
 
-        var instance = new CardInstance(result, position) { SummonedThisTurn = true };
+        var instance = new CardInstance(result, position) { SummonedThisTurn = true, SummonMethod = SummonMethod.Fusion };
         player.MonsterZones[freeZone] = instance;
         player.HasNormalSummonedThisTurn = true;
+        player.HasSummonedThisTurn = true;
 
         Log.Add($"{player.Name} fusiona {a.Name} + {b.Name} => {result.Name} ({result.Attack}/{result.Defense}).");
         State.Events.Enqueue(new FusionPerformedEvent(player.Side, freeZone, new[] { a, b }, result));
@@ -422,6 +439,8 @@ public sealed partial class DuelEngine
 
         if (player.HasNormalSummonedThisTurn)
             return ActionResult.Fail("Ya usaste tu jugada de monstruo este turno.");
+        if (player.CannotSummonThisTurn)
+            return ActionResult.Fail("Un efecto te impide Invocar monstruos este turno.");
 
         int freeZone = player.FirstFreeMonsterZone();
         if (freeZone == -1)
@@ -431,9 +450,10 @@ public sealed partial class DuelEngine
         foreach (int i in indices.OrderByDescending(x => x))
             CardMover.SendToGraveyard(State, new CardRef(player.Hand[i], player.Side, CardZone.Hand, i), MoveCause.Rule);
 
-        var instance = new CardInstance(result, position) { SummonedThisTurn = true };
+        var instance = new CardInstance(result, position) { SummonedThisTurn = true, SummonMethod = SummonMethod.Fusion };
         player.MonsterZones[freeZone] = instance;
         player.HasNormalSummonedThisTurn = true;
+        player.HasSummonedThisTurn = true;
 
         Log.Add($"{player.Name} fusiona {materials.Count} materiales => {result.Name} ({result.Attack}/{result.Defense}).");
         State.Events.Enqueue(new FusionPerformedEvent(player.Side, freeZone, materials, result));
@@ -477,6 +497,8 @@ public sealed partial class DuelEngine
             return ActionResult.Fail($"{spell.Name} no puede invocar a {monster.Name}.");
         if (position == BattlePosition.DefenseFaceDown)
             return ActionResult.Fail("Un Monstruo de Ritual se invoca boca arriba, en Ataque o Defensa.");
+        if (player.CannotSummonThisTurn)
+            return ActionResult.Fail("Un efecto te impide Invocar monstruos este turno.");
 
         // Fuente de verdad: el RequirementSet generico (Fase 1) si la carta
         // ya fue migrada/configurada con un filtro; si no, el campo legacy
@@ -550,7 +572,8 @@ public sealed partial class DuelEngine
         player.Hand.Remove(monster);
 
         int summonZone = player.FirstFreeMonsterZone();
-        player.MonsterZones[summonZone] = new CardInstance(monster, position) { SummonedThisTurn = true };
+        player.MonsterZones[summonZone] = new CardInstance(monster, position) { SummonedThisTurn = true, SummonMethod = SummonMethod.Ritual };
+        player.HasSummonedThisTurn = true;
         Log.Add($"{player.Name} invoca por Ritual a {monster.Name} ({monster.Attack}/{monster.Defense}).");
         State.Events.Enqueue(new RitualPerformedEvent(player.Side, summonZone, monster));
 
@@ -612,9 +635,13 @@ public sealed partial class DuelEngine
             return ActionResult.Fail("Solo se puede Invocar por Volteo un monstruo boca abajo.");
         if (monster.SummonedThisTurn)
             return ActionResult.Fail("No puedes Invocar por Volteo un monstruo Colocado este mismo turno.");
+        if (player.CannotSummonThisTurn)
+            return ActionResult.Fail("Un efecto te impide Invocar monstruos este turno.");
 
         monster.Position = BattlePosition.Attack;
         monster.PositionChangedThisTurn = true;
+        monster.SummonMethod = SummonMethod.Flip;
+        player.HasSummonedThisTurn = true;
         Log.Add($"{player.Name} invoca por Volteo a {monster.Card.Name} ({monster.Card.Attack}/{monster.Card.Defense}).");
         State.Events.Enqueue(new MonsterSummonedEvent(player.Side, zoneIndex, monster.Card, SummonKind.Flip));
         CardMover.RecordInPlace(State, EffectEvent.Summoned, monster.Card, player.Side, CardZone.MonsterZone, MoveCause.Rule);
@@ -708,6 +735,16 @@ public sealed partial class DuelEngine
             var mainCheck = ValidateMainPhaseAction();
             if (!mainCheck.Success) return mainCheck;
 
+            if (spell.ActivationEffect is { } fieldEffect)
+            {
+                var fieldActivation = new EffectActivation(spell, fieldEffect, IndexOf(spell, fieldEffect), player.Side, new CardRef(spell, player.Side, CardZone.FieldZone, 0));
+                if (!CanActivate(fieldActivation)) return ActionResult.Fail($"No se cumplen las condiciones para activar {spell.Name}.");
+                player.Hand.RemoveAt(handIndex);
+                PlaceFieldSpell(player, spell);
+                RunRoutine(ActivationRoutine(fieldActivation));
+                return ActionResult.Ok();
+            }
+
             player.Hand.RemoveAt(handIndex);
             PlaceFieldSpell(player, spell);
             Pump();
@@ -716,6 +753,8 @@ public sealed partial class DuelEngine
 
         var legality = ValidateChainableSpeed(spell.SpellSpeed);
         if (!legality.Success) return legality;
+        if (spell.SubType == SpellSubType.QuickPlay && player.Side != State.ActivePlayer.Side)
+            return ActionResult.Fail("Una Magia de Juego Rapido solo se activa desde la mano en tu propio turno (Colocala para usarla en el turno rival).");
 
         var targetCheck = ValidateEffectTarget(spell.EffectId, player, target);
         if (!targetCheck.Success) return targetCheck;
@@ -728,9 +767,52 @@ public sealed partial class DuelEngine
 
         player.Hand.RemoveAt(handIndex);
         player.SpellTrapZones[freeZone] = new SpellTrapInstance(spell, faceUp: true);
+
+        if (spell.ActivationEffect != null)
+        {
+            var routine = BeginCardActivation(player, freeZone, target, revert: () =>
+            {
+                player.SpellTrapZones[freeZone] = null;
+                player.Hand.Insert(Math.Min(handIndex, player.Hand.Count), spell);
+            });
+            if (!routine.Result.Success) return routine.Result;
+            RunRoutine(routine.Routine!);
+            return ActionResult.Ok();
+        }
+
         AddChainLink(player.Side, freeZone, target);
         Pump();
         return ActionResult.Ok();
+    }
+
+    /// <summary>
+    /// Comprueba y prepara la activacion de una Magia/Trampa con efecto por
+    /// datos que ya esta boca arriba en la Zona <paramref name="zoneIndex"/>.
+    /// Si no se puede activar, deshace la colocacion con <paramref name="revert"/>.
+    /// </summary>
+    private (ActionResult Result, IEnumerable<ChoiceRequest>? Routine) BeginCardActivation(Player player, int zoneIndex, EffectTarget? target, Action revert)
+    {
+        var card = player.SpellTrapZones[zoneIndex]!.Card;
+        var effect = card.ActivationEffect!;
+        var activation = new EffectActivation(card, effect, IndexOf(card, effect), player.Side, new CardRef(card, player.Side, CardZone.SpellTrapZone, zoneIndex))
+        {
+            RespondingTo = TopLinkInfo()
+        };
+        if (!CanActivate(activation))
+        {
+            revert();
+            return (ActionResult.Fail(effect.OncePerTurn && State.UsedOncePerTurn.Contains(OncePerTurnKey(activation))
+                ? $"Solo puedes activar 1 \"{card.Name}\" por turno."
+                : $"No se cumplen las condiciones para activar {card.Name} (costo, objetivos o requisitos)."), null);
+        }
+        return (ActionResult.Ok(), ActivationRoutine(activation, zoneIndex, target));
+    }
+
+    private static int IndexOf(Card card, GodotGame.Core.Effects.Monster.MonsterEffect effect)
+    {
+        for (int i = 0; i < card.Effects.Count; i++)
+            if (ReferenceEquals(card.Effects[i], effect)) return i;
+        return 0;
     }
 
     /// <summary>
@@ -758,6 +840,8 @@ public sealed partial class DuelEngine
 
             var legality = ValidateChainableSpeed(spell.SpellSpeed);
             if (!legality.Success) return legality;
+            if (spell.SubType == SpellSubType.QuickPlay && instance.SetThisTurn)
+                return ActionResult.Fail("No puedes activar una Magia de Juego Rapido el mismo turno en que la Colocaste.");
 
             var targetCheck = ValidateEffectTarget(spell.EffectId, player, target);
             if (!targetCheck.Success) return targetCheck;
@@ -765,6 +849,13 @@ public sealed partial class DuelEngine
             if (!equipCheck.Success) return equipCheck;
 
             instance.FaceUp = true;
+            if (spell.ActivationEffect != null)
+            {
+                var routine = BeginCardActivation(player, zoneIndex, target, revert: () => instance.FaceUp = false);
+                if (!routine.Result.Success) return routine.Result;
+                RunRoutine(routine.Routine!);
+                return ActionResult.Ok();
+            }
             AddChainLink(player.Side, zoneIndex, target);
             Pump();
             return ActionResult.Ok();
@@ -782,6 +873,13 @@ public sealed partial class DuelEngine
             if (!targetCheck.Success) return targetCheck;
 
             instance.FaceUp = true;
+            if (trap.ActivationEffect != null)
+            {
+                var routine = BeginCardActivation(player, zoneIndex, target, revert: () => instance.FaceUp = false);
+                if (!routine.Result.Success) return routine.Result;
+                RunRoutine(routine.Routine!);
+                return ActionResult.Ok();
+            }
             AddChainLink(player.Side, zoneIndex, target);
             Pump();
             return ActionResult.Ok();
@@ -859,7 +957,7 @@ public sealed partial class DuelEngine
     private int TopChainLinkSpeed()
     {
         var top = State.Chain[^1];
-        if (top.MonsterEffect is { } monsterEffect) return monsterEffect.Effect.SpellSpeed;
+        if (top.MonsterEffect is { } monsterEffect) return monsterEffect.SpellSpeed;
         var card = State.GetPlayer(top.Controller).SpellTrapZones[top.ZoneIndex]?.Card;
         return card switch
         {
@@ -871,7 +969,9 @@ public sealed partial class DuelEngine
 
     /// <summary>Jugador que debe actuar ahora: el que tiene la Prioridad si hay una Cadena abierta, o el jugador activo.</summary>
     private Player ChainActingPlayer() =>
-        State.Chain.Count > 0 ? State.GetPlayer(State.ChainPendingResponder!.Value) : State.ActivePlayer;
+        State.Chain.Count > 0 ? State.GetPlayer(State.ChainPendingResponder!.Value)
+        : _windowSide is { } window ? State.GetPlayer(window)
+        : State.ActivePlayer;
 
     private void AddChainLink(PlayerSide controller, int zoneIndex, EffectTarget? target)
     {
@@ -911,6 +1011,7 @@ public sealed partial class DuelEngine
     private IEnumerable<ChoiceRequest> ResolveChainRoutine()
     {
         var negated = new HashSet<int>();
+        var replaced = new Dictionary<int, int>();
         State.ChainResolving = true;
 
         for (int i = State.Chain.Count - 1; i >= 0; i--)
@@ -926,15 +1027,33 @@ public sealed partial class DuelEngine
                 if (capturedIndex > 0) negated.Add(capturedIndex - 1);
             }
 
+            void ReplaceRespondedLink(int discards)
+            {
+                if (capturedIndex > 0) replaced[capturedIndex - 1] = discards;
+            }
+
+            // "El efecto activado se convierte en 'Tu adversario descarta N carta(s)'".
+            if (!isNegated && replaced.TryGetValue(i, out int replacedDiscards))
+            {
+                var source = link.CardIn(State);
+                Log.Add($"El efecto de {source?.Name ?? "la carta"} se convierte en \"Tu adversario descarta {replacedDiscards} carta(s)\".");
+                foreach (var request in ReplacedEffectRoutine(link, source, replacedDiscards)) yield return request;
+                if (link.ZoneIndex >= 0) FinishSpellTrapResolution(player, link, negated: true);
+                CheckLifePoints();
+                continue;
+            }
+
             if (link.MonsterEffect is { } activation)
             {
                 if (isNegated)
+                    Log.Add($"La activacion de {activation.Source.Name} fue negada.");
+                else
                 {
-                    Log.Add($"La activacion del efecto de {activation.Source.Name} fue negada.");
-                    continue;
+                    activation.NegateRespondedLink = NegateRespondedLink;
+                    activation.ReplaceRespondedLink = ReplaceRespondedLink;
+                    foreach (var request in ResolveMonsterEffectRoutine(activation)) yield return request;
                 }
-                activation.NegateRespondedLink = NegateRespondedLink;
-                foreach (var request in ResolveMonsterEffectRoutine(activation)) yield return request;
+                if (link.ZoneIndex >= 0) FinishSpellTrapResolution(player, link, isNegated);
                 continue;
             }
 
@@ -956,6 +1075,45 @@ public sealed partial class DuelEngine
 
     private static PlayerSide Opponent(PlayerSide side) =>
         side == PlayerSide.Human ? PlayerSide.Cpu : PlayerSide.Human;
+
+    /// <summary>
+    /// Despues de resolver (o negar) el eslabon de una Magia/Trampa con efecto
+    /// por datos: segun su subtipo se queda en el Campo (Continua, de Campo,
+    /// de Equipo ya equipada, Trampa Continua) o va al Cementerio (Normal, de
+    /// Juego Rapido, Trampa Normal/de Contraefecto, o cualquiera negada).
+    /// </summary>
+    private void FinishSpellTrapResolution(Player player, ChainLink link, bool negated)
+    {
+        var instance = player.SpellTrapZones[link.ZoneIndex];
+        if (instance == null || link.MonsterEffect is { } a && !ReferenceEquals(instance.Card, a.Source)) return;
+        var card = instance.Card;
+
+        if (!negated && card is SpellCard { SubType: SpellSubType.Equip } equip)
+        {
+            ResolveEquip(player, equip, link);
+            return;
+        }
+
+        bool stays = !negated && card is SpellCard { SubType: SpellSubType.Continuous } or TrapCard { SubType: TrapSubType.Continuous };
+        if (stays)
+        {
+            Log.Add($"{card.Name} permanece boca arriba en el Campo de {player.Name}.");
+            return;
+        }
+
+        CardMover.SendToGraveyard(State, new CardRef(card, player.Side, CardZone.SpellTrapZone, link.ZoneIndex), MoveCause.Rule);
+        Log.Add($"{card.Name} se resuelve y va al Cementerio.");
+    }
+
+    /// <summary>El efecto de un eslabon reemplazado: quien lo activo hace que su adversario descarte N carta(s).</summary>
+    private IEnumerable<ChoiceRequest> ReplacedEffectRoutine(ChainLink link, Card? source, int discards)
+    {
+        if (source == null) yield break;
+        var effect = new GodotGame.Core.Effects.Monster.MonsterEffect(GodotGame.Core.Effects.Monster.MonsterEffectType.Activation,
+            new[] { new EffectStep("discard", EffectActionParams.Of(("Who", "Opponent"), ("Count", discards.ToString()), ("Chooser", "Owner"))) });
+        var activation = new EffectActivation(source, effect, -1, link.Controller, new CardRef(source, link.Controller, CardZone.Graveyard, -1));
+        foreach (var request in ResolveMonsterEffectRoutine(activation)) yield return request;
+    }
 
     private void ResolveSpell(Player player, SpellCard spell, ChainLink link, bool negated, Action negateRespondedLink)
     {
@@ -1107,6 +1265,8 @@ public sealed partial class DuelEngine
         if (State.Phase != DuelPhase.Battle)
             return ActionResult.Fail("Solo puedes atacar durante la Battle Phase.");
 
+        if (_pendingAttack != null) return ActionResult.Fail("Ya hay un ataque en curso.");
+
         var attackerPlayer = State.ActivePlayer;
         var defenderPlayer = State.InactivePlayer;
 
@@ -1122,12 +1282,27 @@ public sealed partial class DuelEngine
         }
 
         bool opponentHasMonsters = defenderPlayer.MonsterCount > 0;
+        if (targetZone == -1 && opponentHasMonsters && !ContinuousEffects.CanAttackDirectly(attacker, State))
+            return ActionResult.Fail("No puedes atacar directamente: el adversario tiene monstruos.");
+        if (targetZone != -1 && GetZone(defenderPlayer, targetZone) == null)
+            return ActionResult.Fail("No hay monstruo objetivo en esa zona.");
+
+        // Ventana de respuesta: el defensor puede activar Trampas, Magias de
+        // Juego Rapido Colocadas o efectos Rapidos antes de que el ataque siga.
+        if (OpenAttackWindow(attackerZone, targetZone))
+            return ActionResult.Ok();
+        return PerformAttack(attackerZone, targetZone);
+    }
+
+    /// <summary>El ataque ya declarado (y, si hubo, despues de la ventana de respuesta del defensor).</summary>
+    private ActionResult PerformAttack(int attackerZone, int targetZone)
+    {
+        var attackerPlayer = State.ActivePlayer;
+        var defenderPlayer = State.InactivePlayer;
+        var attacker = GetZone(attackerPlayer, attackerZone)!;
 
         if (targetZone == -1)
         {
-            if (opponentHasMonsters && !ContinuousEffects.CanAttackDirectly(attacker, State))
-                return ActionResult.Fail("No puedes atacar directamente: el adversario tiene monstruos.");
-
             var directOutcome = BattleResolver.ResolveDirectAttack(attacker, State, attackerPlayer);
             attacker.HasAttackedThisTurn = true;
             ApplyDamage(defenderPlayer, directOutcome.DamageToDefender);
@@ -1177,12 +1352,14 @@ public sealed partial class DuelEngine
 
         if (defenderDestroyed)
         {
-            CardMover.SendToGraveyard(State, new CardRef(defender.Card, defenderPlayer.Side, CardZone.MonsterZone, targetZone), MoveCause.Battle, destroy: true);
+            CardMover.SendToGraveyard(State, new CardRef(defender.Card, defenderPlayer.Side, CardZone.MonsterZone, targetZone),
+                new MoveCause(CauseKind.Battle, attackerPlayer.Side, attacker.Card), destroy: true);
             Log.Add($"{defender.Card.Name} es destruido.");
         }
         if (attackerDestroyed)
         {
-            CardMover.SendToGraveyard(State, new CardRef(attacker.Card, attackerPlayer.Side, CardZone.MonsterZone, attackerZone), MoveCause.Battle, destroy: true);
+            CardMover.SendToGraveyard(State, new CardRef(attacker.Card, attackerPlayer.Side, CardZone.MonsterZone, attackerZone),
+                new MoveCause(CauseKind.Battle, defenderPlayer.Side, defender.Card), destroy: true);
             Log.Add($"{attacker.Card.Name} es destruido.");
         }
 
@@ -1227,6 +1404,7 @@ public sealed partial class DuelEngine
         var pendingCheck = ValidateNoPendingChoice();
         if (!pendingCheck.Success) return pendingCheck;
         if (_endTurnStage != EndTurnStage.None) return ActionResult.Fail("El turno esta terminando.");
+        if (_pendingAttack != null) return ActionResult.Fail("Hay un ataque en curso.");
         var chainCheck = ValidateNoOpenChain();
         if (!chainCheck.Success) return chainCheck;
         if (State.Phase is not (DuelPhase.Main1 or DuelPhase.Main2))

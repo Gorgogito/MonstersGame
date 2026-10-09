@@ -1510,6 +1510,25 @@ public partial class Duel : Control
             }
         }
 
+        else if (!choosing && !discarding && chainOpen && state.ChainPendingResponder == PlayerSide.Human)
+        {
+            // Turno rival: tienes la Prioridad en su Cadena. Puedes responder con
+            // una carta Colocada (Trampa, Juego Rapido), con EFECTOS, o pasar.
+            chainPassVisible = true;
+            chainPassAction = () => { if (state.ChainPendingResponder == PlayerSide.Human) Apply(_engine.PassPriority()); };
+            if (_targetMode)
+            {
+                cancelVisible = true;
+                cancelAction = CancelTargetSelection;
+            }
+            else if (_spellTrapCursor >= 0 && _spellTrapCursor < Player.SpellTrapZoneCount
+                     && human.SpellTrapZones[_spellTrapCursor] is { FaceUp: false } setCard)
+            {
+                string effectId = setCard.Card switch { SpellCard s => s.EffectId, TrapCard t => t.EffectId, _ => "" };
+                ShowCtx1("ACTIVAR", () => BeginActivation(isSetCard: true, _spellTrapCursor, effectId));
+            }
+        }
+
         _ctx0.Visible = ctx0Visible;
         if (ctx0Visible) { _ctx0.Text = ctx0Text; _ctx0.Disabled = !ctx0Enabled; }
         _ctx0Action = ctx0Action;
@@ -1642,7 +1661,14 @@ public partial class Duel : Control
             case MonsterEffectActivatedEvent effect:
             {
                 _audio.PlaySfx("chain");
-                if (effect.Zone == CardZone.MonsterZone && ZoneButtonFor(ZoneKind.Monster, effect.Side, effect.ZoneIndex) is { } effectButton)
+                var effectButton = effect.Zone switch
+                {
+                    CardZone.MonsterZone => ZoneButtonFor(ZoneKind.Monster, effect.Side, effect.ZoneIndex),
+                    CardZone.SpellTrapZone => ZoneButtonFor(ZoneKind.SpellTrap, effect.Side, effect.ZoneIndex),
+                    CardZone.FieldZone => ZoneButtonFor(ZoneKind.Field, effect.Side, 0),
+                    _ => null
+                };
+                if (effectButton != null)
                 {
                     FlashButton(effectButton, ColorForEvent(evt));
                     PopButton(effectButton);
@@ -1709,18 +1735,21 @@ public partial class Duel : Control
     private void ShowChoice(ChoiceRequest choice)
     {
         ClearSelections();
-        string title = choice.Source?.Name ?? "Efecto";
+        string title = choice.IsResponseWindow ? "¡ATAQUE!" : choice.Source?.Name ?? "Efecto";
         switch (choice.Kind)
         {
             case ChoiceKind.YesNo:
                 _choicePanel.ShowYesNo(choice, title, choice.Prompt, yes => AnswerChoice(() => _engine.AnswerYesNo(yes)));
+                break;
+            case ChoiceKind.Reveal:
+                _choicePanel.ShowReveal(choice, title, choice.Prompt, choice.Candidates, () => AnswerChoice(_engine.AcknowledgeReveal));
                 break;
             case ChoiceKind.SelectOption:
                 _choicePanel.ShowOptions(choice, title, choice.Prompt, choice.Options, option => AnswerChoice(() => _engine.AnswerOption(option)));
                 break;
             default:
                 _choicePanel.ShowCards(choice, title, choice.Prompt, choice.Candidates, choice.Min, choice.Max,
-                    indices => AnswerChoice(() => _engine.AnswerCards(indices)));
+                    indices => AnswerChoice(() => _engine.AnswerCards(indices)), choice.RevealCandidates);
                 break;
         }
     }
@@ -1732,14 +1761,14 @@ public partial class Duel : Control
         if (result.Success) _choicePanel.HidePanel();
     }
 
-    /// <summary>Lista de efectos de Monstruo que puedes activar ahora (mano, Campo, Cementerio, desterradas).</summary>
+    /// <summary>Lista de efectos (de Monstruos y de Magias/Trampas) que puedes activar ahora (mano, Campo, Cementerio, desterradas).</summary>
     private void OpenEffectsMenu()
     {
         var effects = _engine.GetActivatableEffects(PlayerSide.Human);
         if (effects.Count == 0) return;
         ClearSelections();
         _effectsMenuOpen = true;
-        _choicePanel.ShowOptions("effects-menu", "EFECTOS DE MONSTRUO", "Elige el efecto que quieres activar.",
+        _choicePanel.ShowOptions("effects-menu", "EFECTOS DISPONIBLES", "Elige el efecto que quieres activar.",
             effects.Select(e => e.Label).ToList(),
             index =>
             {

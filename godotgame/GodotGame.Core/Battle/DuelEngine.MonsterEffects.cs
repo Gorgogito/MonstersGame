@@ -1,3 +1,4 @@
+using GodotGame.Core.Effects;
 using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Entities;
 
@@ -12,9 +13,11 @@ public sealed record ActivatableEffect(CardRef Card, int EffectIndex, MonsterEff
 }
 
 /// <summary>
-/// Efectos de Monstruo en el motor: activacion manual (Encendido, Rapido, No
-/// clasificado), ventana de efectos Disparados/Volteo tras cada accion,
-/// resolucion en la Cadena y elecciones de los jugadores a mitad de efecto.
+/// Efectos por datos en el motor (de Monstruos y de Magias/Trampas):
+/// activacion manual (Encendido, Rapido, No clasificado), activacion de una
+/// Magia/Trampa, ventana de efectos Disparados/Volteo tras cada accion,
+/// ventana de respuesta a un ataque, resolucion en la Cadena y elecciones de
+/// los jugadores a mitad de efecto.
 ///
 /// La resolucion se escribe como corrutinas (<c>IEnumerable&lt;ChoiceRequest&gt;</c>):
 /// cuando un paso necesita una decision la devuelve, el motor la publica en
@@ -29,6 +32,13 @@ public sealed partial class DuelEngine
 
     private enum EndTurnStage { None, HandLimit, Finish }
     private EndTurnStage _endTurnStage;
+
+    /// <summary>Un ataque declarado que espera a que el defensor responda (y a que se resuelva lo que active).</summary>
+    private sealed record PendingAttack(int AttackerZone, int TargetZone, Card Attacker, Card? Target);
+    private PendingAttack? _pendingAttack;
+
+    /// <summary>Jugador que tiene la ventana de respuesta a un ataque (puede activar sin ser su turno y sin Cadena).</summary>
+    private PlayerSide? _windowSide;
 
     // ------------------------------------------------------------ Elecciones
 
@@ -48,6 +58,16 @@ public sealed partial class DuelEngine
         if (State.PendingChoice is not { Kind: ChoiceKind.SelectOption } choice) return ActionResult.Fail("No hay ninguna opcion pendiente.");
         if (option < 0 || option >= choice.Options.Count) return ActionResult.Fail("Opcion invalida.");
         choice.AnswerOption(option);
+        State.PendingChoice = null;
+        Pump();
+        return ActionResult.Ok();
+    }
+
+    /// <summary>Cierra una <see cref="ChoiceKind.Reveal"/> pendiente (el jugador ya vio las cartas).</summary>
+    public ActionResult AcknowledgeReveal()
+    {
+        if (State.PendingChoice is not { Kind: ChoiceKind.Reveal } choice) return ActionResult.Fail("No hay cartas que mostrar.");
+        choice.Acknowledge();
         State.PendingChoice = null;
         Pump();
         return ActionResult.Ok();
@@ -124,6 +144,12 @@ public sealed partial class DuelEngine
                     continue;
                 }
 
+                if (_pendingAttack != null)
+                {
+                    ContinuePendingAttack();
+                    continue;
+                }
+
                 if (_endTurnStage != EndTurnStage.None)
                 {
                     ContinueEndTurn();
@@ -154,20 +180,26 @@ public sealed partial class DuelEngine
             return result;
 
         var player = State.GetPlayer(side);
-        foreach (var (zone, effectZone) in new[] { (CardZone.MonsterZone, EffectZone.Field), (CardZone.Hand, EffectZone.Hand), (CardZone.Graveyard, EffectZone.Graveyard), (CardZone.Banished, EffectZone.Banished) })
+        var zones = new[]
+        {
+            (CardZone.MonsterZone, EffectZone.Field), (CardZone.SpellTrapZone, EffectZone.Field), (CardZone.FieldZone, EffectZone.Field),
+            (CardZone.Hand, EffectZone.Hand), (CardZone.Graveyard, EffectZone.Graveyard), (CardZone.Banished, EffectZone.Banished)
+        };
+        foreach (var (zone, effectZone) in zones)
         {
             var seen = new HashSet<(Card, int)>(ReferenceTupleComparer.Instance);
             foreach (var card in CardQuery.Enumerate(player, side, zone))
             {
-                if (card.Card is not MonsterCard monster || monster.Effects.Count == 0) continue;
-                if (zone == CardZone.MonsterZone && card.MonsterInstance(State) is not { IsFaceUp: true }) continue;
+                var effects = card.Card.Effects;
+                if (effects.Count == 0) continue;
+                if (zone is CardZone.MonsterZone or CardZone.SpellTrapZone or CardZone.FieldZone && !card.IsFaceUp(State)) continue;
 
-                for (int i = 0; i < monster.Effects.Count; i++)
+                for (int i = 0; i < effects.Count; i++)
                 {
-                    var effect = monster.Effects[i];
+                    var effect = effects[i];
                     if (!effect.IsManual || effect.ActivationZone != effectZone) continue;
                     // Copias identicas en mano/Cementerio: basta con ofrecer una.
-                    if (zone != CardZone.MonsterZone && !seen.Add((monster, i))) continue;
+                    if (zone is CardZone.Hand or CardZone.Graveyard or CardZone.Banished && !seen.Add((card.Card, i))) continue;
                     if (!CanActivateManual(side, card, effect, i)) continue;
                     result.Add(new ActivatableEffect(card, i, effect));
                 }
@@ -189,9 +221,18 @@ public sealed partial class DuelEngine
             && (e.Card.Zone != CardZone.MonsterZone || e.Card.Index == effect.Card.Index));
         if (live == null) return ActionResult.Fail("Ese efecto no se puede activar ahora.");
 
-        var activation = new EffectActivation(live.Card.Card, live.Effect, live.EffectIndex, side, live.Card);
+        var activation = new EffectActivation(live.Card.Card, live.Effect, live.EffectIndex, side, live.Card) { RespondingTo = TopLinkInfo() };
         RunRoutine(ActivationRoutine(activation));
         return ActionResult.Ok();
+    }
+
+    /// <summary>Lo que se sabe del eslabon superior de la Cadena (al que responderia una activacion ahora).</summary>
+    private ChainLinkInfo? TopLinkInfo()
+    {
+        if (State.Chain.Count == 0) return null;
+        var top = State.Chain[^1];
+        return new ChainLinkInfo(State.Chain.Count - 1, top.Controller, top.CardIn(State),
+            top.MonsterEffect is { } effect && effect.Effect.Type != MonsterEffectType.Activation && effect.Source is MonsterCard);
     }
 
     private bool CanActivateManual(PlayerSide side, CardRef card, MonsterEffect effect, int effectIndex)
@@ -208,13 +249,14 @@ public sealed partial class DuelEngine
                 {
                     if (State.ChainPendingResponder != side || effect.SpellSpeed < TopChainLinkSpeed()) return false;
                 }
+                else if (_windowSide == side) { }
                 else if (!myTurn || State.Phase is not (DuelPhase.Main1 or DuelPhase.Battle or DuelPhase.Main2)) return false;
                 break;
             default:
                 return false;
         }
 
-        var activation = new EffectActivation(card.Card, effect, effectIndex, side, card);
+        var activation = new EffectActivation(card.Card, effect, effectIndex, side, card) { RespondingTo = TopLinkInfo() };
         return CanActivate(activation);
     }
 
@@ -246,7 +288,18 @@ public sealed partial class DuelEngine
         {
             var query = new CardQuery(target, "MonsterZone", RelativeSide.Both);
             int available = query.Candidates(State, activation.Controller, activation.Source, activation.SourceRef).Count;
-            if (available < Math.Max(1, query.Min)) return false;
+            if (query.Min > 0 && available < query.Min) return false;
+        }
+
+        // Una Magia/Trampa no se puede activar si su efecto no podria hacer
+        // nada (ej. "Invoca por Fusion ..." sin materiales): se mira el primer
+        // paso obligatorio y sin condiciones que no dependa de los objetivos.
+        if (effect.Type == MonsterEffectType.Activation)
+        {
+            var first = effect.Steps.FirstOrDefault(s => !s.Optional && s.Conditions.Count == 0);
+            if (first != null && !first.Params.GetBool("UseTargets") && !first.Params.GetBool("UseLastAffected")
+                && MonsterEffectCatalog.Step(first.ActionKind) is { } info && !info.Factory().CanRun(ctx, first.Params))
+                return false;
         }
         return true;
     }
@@ -259,15 +312,24 @@ public sealed partial class DuelEngine
     /// Activa el efecto: paga costos, elige objetivos y lo agrega a la Cadena
     /// (o, si es No clasificado, lo aplica en el acto sin Cadena).
     /// </summary>
-    private IEnumerable<ChoiceRequest> ActivationRoutine(EffectActivation activation)
+    private IEnumerable<ChoiceRequest> ActivationRoutine(EffectActivation activation, int chainZoneIndex = -1, EffectTarget? legacyTarget = null)
     {
         var effect = activation.Effect;
         var ctx = new MonsterEffectContext(State, activation);
         var player = State.GetPlayer(activation.Controller);
+        bool cardActivation = effect.Type == MonsterEffectType.Activation;
+        activation.RespondingTo ??= TopLinkInfo();
 
-        Log.Add($"{player.Name} activa el efecto de {activation.Source.Name} ({MonsterEffectCatalog.TypeLabel(effect.Type)}).");
-        if (activation.Source is MonsterCard monster)
-            State.Events.Enqueue(new MonsterEffectActivatedEvent(activation.Controller, monster, activation.SourceRef.Zone, activation.SourceRef.Index, effect.Type));
+        if (cardActivation)
+        {
+            Log.Add($"{player.Name} activa {activation.Source.Name}.");
+            if (chainZoneIndex >= 0) State.Events.Enqueue(new SpellTrapActivatedEvent(activation.Controller, chainZoneIndex, activation.Source));
+        }
+        else
+        {
+            Log.Add($"{player.Name} activa el efecto de {activation.Source.Name} ({MonsterEffectCatalog.TypeLabel(effect.Type)}).");
+            State.Events.Enqueue(new MonsterEffectActivatedEvent(activation.Controller, activation.Source, activation.SourceRef.Zone, activation.SourceRef.Index, effect.Type));
+        }
         if (effect.OncePerTurn) State.UsedOncePerTurn.Add(OncePerTurnKey(activation));
 
         // Costos.
@@ -282,6 +344,7 @@ public sealed partial class DuelEngine
             {
                 Log.Add($"No se puede pagar el costo de {activation.Source.Name}: el efecto no se activa.");
                 activation.PayingCost = false;
+                AbortCardActivation(activation, chainZoneIndex);
                 yield break;
             }
             foreach (var request in step.Run(ctx, cost.Params)) yield return request;
@@ -296,6 +359,7 @@ public sealed partial class DuelEngine
             if (candidates.Count < query.Min)
             {
                 Log.Add($"{activation.Source.Name} no tiene objetivos validos.");
+                AbortCardActivation(activation, chainZoneIndex);
                 yield break;
             }
             var choice = ctx.SelectCards(query.Chooser, activation.Controller, $"{activation.Source.Name}: selecciona el/los objetivo(s).",
@@ -314,10 +378,22 @@ public sealed partial class DuelEngine
             yield break;
         }
 
-        State.Chain.Add(new ChainLink { Controller = activation.Controller, ZoneIndex = -1, MonsterEffect = activation });
+        State.Chain.Add(new ChainLink { Controller = activation.Controller, ZoneIndex = chainZoneIndex, MonsterEffect = activation, Target = legacyTarget });
         State.ChainConsecutivePasses = 0;
         State.ChainPendingResponder = Opponent(activation.Controller);
-        Log.Add($"{player.Name} encadena el efecto de {activation.Source.Name} (Eslabon {State.Chain.Count}).");
+        Log.Add(cardActivation
+            ? $"{player.Name} encadena {activation.Source.Name} (Eslabon {State.Chain.Count})."
+            : $"{player.Name} encadena el efecto de {activation.Source.Name} (Eslabon {State.Chain.Count}).");
+    }
+
+    /// <summary>Una Magia/Trampa que no llego a activarse (costo u objetivos imposibles) va al Cementerio en vez de quedar boca arriba sin efecto.</summary>
+    private void AbortCardActivation(EffectActivation activation, int chainZoneIndex)
+    {
+        if (activation.Effect.Type != MonsterEffectType.Activation || chainZoneIndex < 0) return;
+        var player = State.GetPlayer(activation.Controller);
+        if (!ReferenceEquals(player.SpellTrapZones[chainZoneIndex]?.Card, activation.Source)) return;
+        CardMover.SendToGraveyard(State, new CardRef(activation.Source, activation.Controller, CardZone.SpellTrapZone, chainZoneIndex), MoveCause.Rule);
+        Log.Add($"{activation.Source.Name} va al Cementerio sin efecto.");
     }
 
     /// <summary>Para la IA: si los objetivos del efecto salen perdiendo (destruir, desterrar) o ganando (Invocar, ATK).</summary>
@@ -393,15 +469,24 @@ public sealed partial class DuelEngine
         var pending = new List<EffectActivation>();
         foreach (var evt in events)
         {
-            if (evt.Card is not MonsterCard monster || monster.Effects.Count == 0) continue;
-            for (int i = 0; i < monster.Effects.Count; i++)
+            // "Si esta carta ...": los efectos de la propia carta del evento.
+            var card = evt.Card;
+            for (int i = 0; i < card.Effects.Count; i++)
             {
-                var effect = monster.Effects[i];
-                if (!effect.IsTriggered || effect.TriggerEvent != evt.Kind) continue;
-                if (pending.Any(p => ReferenceEquals(p.Source, monster) && p.EffectIndex == i && p.Trigger == evt)) continue;
+                var effect = card.Effects[i];
+                if (!effect.IsTriggered || effect.Subject != EventSubject.ThisCard || effect.TriggerEvent != evt.Kind) continue;
+                if (pending.Any(p => ReferenceEquals(p.Source, card) && p.EffectIndex == i && p.Trigger == evt)) continue;
 
-                var source = LocateTriggerSource(evt) ?? new CardRef(monster, evt.Controller, evt.ToZone, -1);
-                pending.Add(new EffectActivation(monster, effect, i, evt.Controller, source) { Trigger = evt });
+                var source = LocateTriggerSource(evt) ?? new CardRef(card, evt.Controller, evt.ToZone, -1);
+                pending.Add(new EffectActivation(card, effect, i, evt.Controller, source) { Trigger = evt });
+            }
+
+            // "Si un monstruo ... es ...": efectos de otras cartas que vigilan este evento.
+            foreach (var (watcher, index, effect) in Watchers(evt.Kind))
+            {
+                if (pending.Any(p => ReferenceEquals(p.Source, watcher.Card) && p.EffectIndex == index && p.Effect.Subject == EventSubject.AnyCard)) continue;
+                if (!WatchedEventMatches(watcher, effect, evt)) continue;
+                pending.Add(new EffectActivation(watcher.Card, effect, index, watcher.Side, watcher) { Trigger = evt });
             }
         }
         if (pending.Count == 0) return;
@@ -433,29 +518,71 @@ public sealed partial class DuelEngine
         }
     }
 
+    /// <summary>Cartas (de ambos jugadores) con un efecto Disparado sobre "otra carta" para este evento, que estan en su zona de activacion.</summary>
+    private IEnumerable<(CardRef Card, int Index, MonsterEffect Effect)> Watchers(EffectEvent kind)
+    {
+        foreach (var player in State.Players)
+        {
+            foreach (var zone in new[] { CardZone.MonsterZone, CardZone.SpellTrapZone, CardZone.FieldZone, CardZone.Hand, CardZone.Graveyard, CardZone.Banished })
+            {
+                foreach (var card in CardQuery.Enumerate(player, player.Side, zone))
+                {
+                    var effects = card.Card.Effects;
+                    for (int i = 0; i < effects.Count; i++)
+                    {
+                        var effect = effects[i];
+                        if (effect.Type != MonsterEffectType.Trigger || effect.Subject != EventSubject.AnyCard || effect.TriggerEvent != kind) continue;
+                        bool inZone = effect.ActivationZone switch
+                        {
+                            EffectZone.Field => zone is CardZone.MonsterZone or CardZone.SpellTrapZone or CardZone.FieldZone && card.IsFaceUp(State),
+                            EffectZone.Hand => zone == CardZone.Hand,
+                            EffectZone.Graveyard => zone == CardZone.Graveyard,
+                            EffectZone.Banished => zone == CardZone.Banished,
+                            _ => false
+                        };
+                        if (inZone) yield return (card, i, effect);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Si la carta del evento cumple el filtro del efecto que lo vigila (lado relativo a quien controla el efecto).</summary>
+    private bool WatchedEventMatches(CardRef watcher, MonsterEffect effect, TriggerEvent evt)
+    {
+        var filter = effect.EventFilter ?? EffectActionParams.Empty;
+        var query = new CardQuery(filter.With("From", evt.ToZone.ToString()), evt.ToZone.ToString(), RelativeSide.Both);
+        if (!CardQuery.Sides(query.Side, watcher.Side).Contains(evt.Controller)) return false;
+        if (query.ExcludeSource && ReferenceEquals(evt.Card, watcher.Card)) return false;
+        return query.Matches(State, new CardRef(evt.Card, evt.Controller, evt.ToZone, -1), watcher.Card);
+    }
+
     /// <summary>Donde quedo la carta tras el evento (para "Invoca esta carta" desde el Cementerio, etc.).</summary>
     private CardRef? LocateTriggerSource(TriggerEvent evt)
     {
         var player = State.GetPlayer(evt.Controller);
         return evt.ToZone switch
         {
-            CardZone.MonsterZone => CardQuery.Enumerate(player, evt.Controller, CardZone.MonsterZone).LastOrDefault(c => ReferenceEquals(c.Card, evt.Card)),
+            CardZone.MonsterZone or CardZone.SpellTrapZone or CardZone.FieldZone =>
+                CardQuery.Enumerate(player, evt.Controller, evt.ToZone).LastOrDefault(c => ReferenceEquals(c.Card, evt.Card)),
             CardZone.Hand or CardZone.Deck or CardZone.Graveyard or CardZone.Banished =>
                 CardQuery.Enumerate(player, evt.Controller, evt.ToZone).LastOrDefault(c => ReferenceEquals(c.Card, evt.Card)),
             _ => null
         };
     }
 
-    /// <summary>Registra un evento de fase (Standby/End) para los Monstruos boca arriba del jugador del turno que lo usan.</summary>
+    /// <summary>Registra un evento de fase (Standby/End) para las cartas boca arriba del jugador del turno que lo usan.</summary>
     private void RecordPhaseEvents(EffectEvent kind)
     {
         var player = State.ActivePlayer;
-        for (int zone = 0; zone < player.MonsterZones.Length; zone++)
+        foreach (var zone in new[] { CardZone.MonsterZone, CardZone.SpellTrapZone, CardZone.FieldZone })
         {
-            var instance = player.MonsterZones[zone];
-            if (instance is not { IsFaceUp: true }) continue;
-            if (!instance.Card.Effects.Any(e => e.IsTriggered && e.TriggerEvent == kind)) continue;
-            CardMover.RecordInPlace(State, kind, instance.Card, player.Side, CardZone.MonsterZone, MoveCause.Rule);
+            foreach (var card in CardQuery.Enumerate(player, player.Side, zone))
+            {
+                if (!card.IsFaceUp(State)) continue;
+                if (!card.Card.Effects.Any(e => e.IsTriggered && e.Subject == EventSubject.ThisCard && e.TriggerEvent == kind)) continue;
+                CardMover.RecordInPlace(State, kind, card.Card, player.Side, zone, MoveCause.Rule);
+            }
         }
     }
 
@@ -484,22 +611,176 @@ public sealed partial class DuelEngine
         int required = Math.Max(2, TopChainLinkSpeed());
         var player = State.GetPlayer(side);
 
-        foreach (var instance in player.SpellTrapZones)
+        for (int zone = 0; zone < player.SpellTrapZones.Length; zone++)
         {
+            var instance = player.SpellTrapZones[zone];
             if (instance == null || instance.FaceUp) continue;
             int speed = instance.Card switch
             {
+                SpellCard { SubType: SpellSubType.QuickPlay } when instance.SetThisTurn => 0,
                 SpellCard { SubType: not (SpellSubType.Ritual or SpellSubType.Field) } s => s.SpellSpeed,
                 TrapCard t when !instance.SetThisTurn => t.SpellSpeed,
                 _ => 0
             };
-            if (speed >= required) return true;
+            if (speed < required) continue;
+            if (instance.Card.ActivationEffect == null || CanActivateSetCardNow(player, zone)) return true;
         }
 
-        if (player.Hand.Any(c => c is SpellCard { SubType: not (SpellSubType.Ritual or SpellSubType.Field) } s && s.SpellSpeed >= required && player.FirstFreeSpellTrapZone() != -1))
+        bool myTurn = State.ActivePlayer.Side == side;
+        if (myTurn && player.FirstFreeSpellTrapZone() != -1
+            && player.Hand.Any(c => c is SpellCard { SubType: not (SpellSubType.Ritual or SpellSubType.Field) } s && s.SpellSpeed >= required))
             return true;
 
         return GetActivatableEffects(side).Any(e => e.Effect.Type == MonsterEffectType.Quick);
+    }
+
+    /// <summary>Si la carta Colocada en esa zona (con efecto por datos) cumple ahora sus condiciones, costos y objetivos.</summary>
+    private bool CanActivateSetCardNow(Player player, int zone)
+    {
+        var instance = player.SpellTrapZones[zone];
+        if (instance?.Card.ActivationEffect is not { } effect) return false;
+        var activation = new EffectActivation(instance.Card, effect, IndexOf(instance.Card, effect), player.Side,
+            new CardRef(instance.Card, player.Side, CardZone.SpellTrapZone, zone)) { RespondingTo = TopLinkInfo() };
+        return CanActivate(activation);
+    }
+
+    // ------------------------------------------------------------ Ventana de respuesta a un ataque
+
+    /// <summary>Algo que el defensor puede activar cuando le declaran un ataque.</summary>
+    private sealed record WindowOption(string Label, Func<IEnumerable<ChoiceRequest>> Start);
+
+    /// <summary>
+    /// Trampas y Magias de Juego Rapido Colocadas (no este turno) y efectos
+    /// Rapidos que <paramref name="side"/> puede activar ahora, sin Cadena,
+    /// en respuesta a la declaracion de un ataque.
+    /// </summary>
+    private List<WindowOption> AttackWindowOptions(PlayerSide side, int attackerZone)
+    {
+        var options = new List<WindowOption>();
+        var player = State.GetPlayer(side);
+        _windowSide = side;
+        try
+        {
+            for (int zone = 0; zone < player.SpellTrapZones.Length; zone++)
+            {
+                var instance = player.SpellTrapZones[zone];
+                if (instance == null || instance.FaceUp || instance.SetThisTurn) continue;
+                bool quick = instance.Card is TrapCard || instance.Card is SpellCard { SubType: SpellSubType.QuickPlay };
+                if (!quick) continue;
+                int captured = zone;
+                var card = instance.Card;
+
+                if (card.ActivationEffect != null)
+                {
+                    if (!CanActivateSetCardNow(player, zone)) continue;
+                    options.Add(new WindowOption($"Activar {card.Name} (Colocada)", () => ActivateSetCardInWindow(player, captured, null)));
+                    continue;
+                }
+
+                string effectId = card switch { SpellCard s => s.EffectId, TrapCard t => t.EffectId, _ => "" };
+                EffectTarget? target = null;
+                if (EffectDefinitionResolver.Get(effectId) is ITargetedEffectAction targeted)
+                {
+                    // Una Trampa heredada con objetivo en el Campo apunta al atacante.
+                    if (targeted.TargetKind != EffectTargetKind.MonsterZone) continue;
+                    var attackerTarget = new EffectTarget { Side = Opponent(side), ZoneIndex = attackerZone };
+                    if (!targeted.IsValidTarget(State, player, attackerTarget)) continue;
+                    target = attackerTarget;
+                }
+                var chosenTarget = target;
+                options.Add(new WindowOption($"Activar {card.Name} (Colocada){(chosenTarget != null ? " sobre el atacante" : "")}",
+                    () => ActivateSetCardInWindow(player, captured, chosenTarget)));
+            }
+
+            foreach (var effect in GetActivatableEffects(side).Where(e => e.Effect.Type == MonsterEffectType.Quick))
+            {
+                var captured = effect;
+                options.Add(new WindowOption($"Efecto de {effect.Label}", () => ActivationRoutine(
+                    new EffectActivation(captured.Card.Card, captured.Effect, captured.EffectIndex, side, captured.Card))));
+            }
+        }
+        finally
+        {
+            _windowSide = null;
+        }
+        return options;
+    }
+
+    private IEnumerable<ChoiceRequest> ActivateSetCardInWindow(Player player, int zone, EffectTarget? target)
+    {
+        var instance = player.SpellTrapZones[zone];
+        if (instance == null || instance.FaceUp) yield break;
+        instance.FaceUp = true;
+        if (instance.Card.ActivationEffect is { } effect)
+        {
+            var activation = new EffectActivation(instance.Card, effect, IndexOf(instance.Card, effect), player.Side,
+                new CardRef(instance.Card, player.Side, CardZone.SpellTrapZone, zone));
+            foreach (var request in ActivationRoutine(activation, zone)) yield return request;
+            yield break;
+        }
+        AddChainLink(player.Side, zone, target);
+    }
+
+    /// <summary>Si el defensor tiene algo que activar, pausa el ataque y le pregunta. Devuelve verdadero si el ataque quedo pendiente.</summary>
+    private bool OpenAttackWindow(int attackerZone, int targetZone)
+    {
+        var defender = State.InactivePlayer.Side;
+        if (AttackWindowOptions(defender, attackerZone).Count == 0) return false;
+
+        var attacker = State.ActivePlayer.MonsterZones[attackerZone]!;
+        attacker.HasAttackedThisTurn = true;
+        var target = targetZone >= 0 ? State.InactivePlayer.MonsterZones[targetZone]?.Card : null;
+        _pendingAttack = new PendingAttack(attackerZone, targetZone, attacker.Card, target);
+        string what = target == null ? "directamente" : (State.InactivePlayer.MonsterZones[targetZone]!.IsFaceUp ? $"a {target.Name}" : "a tu monstruo boca abajo");
+        Log.Add($"{State.ActivePlayer.Name} declara un ataque con {attacker.Card.Name} {what}.");
+        RunRoutine(AttackWindowRoutine(defender, attackerZone, $"{attacker.Card.Name} ataca {what}. ¿Activas una carta o un efecto?", attacker.Card));
+        return true;
+    }
+
+    private IEnumerable<ChoiceRequest> AttackWindowRoutine(PlayerSide side, int attackerZone, string prompt, Card attacker)
+    {
+        var options = AttackWindowOptions(side, attackerZone);
+        if (options.Count == 0) yield break;
+
+        var ask = ChoiceRequest.Pick(side, prompt, attacker, new[] { "No activar nada" }.Concat(options.Select(o => o.Label)).ToList());
+        ask.IsResponseWindow = true;
+        yield return ask;
+        if (ask.Option <= 0 || ask.Option > options.Count) yield break;
+
+        _windowSide = side;
+        foreach (var request in options[ask.Option - 1].Start()) yield return request;
+        _windowSide = null;
+    }
+
+    /// <summary>Despues de la ventana (y de la Cadena que se haya formado): el ataque sigue si atacante y objetivo siguen ahi.</summary>
+    private void ContinuePendingAttack()
+    {
+        var pending = _pendingAttack!;
+        _pendingAttack = null;
+        _windowSide = null;
+        if (State.IsOver || State.Phase != DuelPhase.Battle) return;
+
+        var attacker = State.ActivePlayer.MonsterZones[pending.AttackerZone];
+        if (attacker == null || !ReferenceEquals(attacker.Card, pending.Attacker) || attacker.Position != BattlePosition.Attack)
+        {
+            Log.Add($"El ataque de {pending.Attacker.Name} no se realiza.");
+            return;
+        }
+        if (pending.TargetZone >= 0)
+        {
+            var target = State.InactivePlayer.MonsterZones[pending.TargetZone];
+            if (target == null || !ReferenceEquals(target.Card, pending.Target))
+            {
+                Log.Add($"El objetivo del ataque de {pending.Attacker.Name} ya no está: el ataque se detiene.");
+                return;
+            }
+        }
+        else if (State.InactivePlayer.MonsterCount > 0 && !ContinuousEffects.CanAttackDirectly(attacker, State))
+        {
+            Log.Add($"El adversario ahora controla monstruos: el ataque directo de {pending.Attacker.Name} se detiene.");
+            return;
+        }
+        PerformAttack(pending.AttackerZone, pending.TargetZone);
     }
 
     // ------------------------------------------------------------ End Phase diferida

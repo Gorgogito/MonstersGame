@@ -96,6 +96,15 @@ public sealed class DuelState
     /// <summary>Verdadero mientras la Cadena se esta resolviendo (nadie puede responder ni pasar).</summary>
     public bool ChainResolving { get; set; }
 
+    /// <summary>
+    /// Cartas mandadas al Cementerio durante este turno (por referencia), para
+    /// "excepto en el turno en que esta carta fue mandada al Cementerio".
+    /// </summary>
+    public HashSet<Card> SentToGraveyardThisTurn { get; } = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Recetas de Fusion del duelo (para "Invoca por Fusion ..." de los efectos). Lo establece <see cref="DuelEngine.StartDuel"/>.</summary>
+    public GodotGame.Core.Services.FusionService? Fusion { get; set; }
+
     /// <summary>Azar del duelo (elecciones "al azar" de los efectos). Reemplazable para pruebas deterministas.</summary>
     public Random Rng { get; set; } = new();
 

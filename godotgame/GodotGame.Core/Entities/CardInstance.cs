@@ -40,6 +40,12 @@ public sealed class CardInstance
     /// </summary>
     public PlayerSide? Owner { get; set; }
 
+    /// <summary>Como entro al Campo (Normal, Colocada, por Volteo, Especial, Fusion o Ritual).</summary>
+    public SummonMethod SummonMethod { get; set; } = SummonMethod.Special;
+
+    /// <summary>Nivel ganado/perdido por efectos (ver <see cref="ActiveStatModifier.LevelAmount"/>).</summary>
+    public int EffectiveLevel => Math.Max(1, Card.Level + ActiveModifiers.Sum(m => m.LevelAmount));
+
     public CardInstance(MonsterCard card, BattlePosition position)
     {
         Card = card;

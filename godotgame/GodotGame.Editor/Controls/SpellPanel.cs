@@ -1,4 +1,5 @@
 using Godot;
+using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Entities;
 using GodotGame.Data.Loaders;
 using GodotGame.Editor.Data;
@@ -6,10 +7,10 @@ using GodotGame.Editor.Data;
 namespace GodotGame.Editor.Controls;
 
 /// <summary>
-/// Panel de propiedades de una carta Magica: SubType/Efecto comunes, mas los
-/// campos de Ritual (visibles solo si SubType = Ritual), Equipo (SubType =
-/// Equip) y Campo (SubType = Field). Adaptacion Godot de <c>SpellPanel</c>
-/// de MonstersGame.CardEditor.
+/// Panel de propiedades de una carta Magica: subtipo (con la explicacion de
+/// como se juega cada uno), los efectos por datos de la carta y los campos
+/// propios de Ritual (visibles solo si SubType = Ritual), Equipo (SubType =
+/// Equip) y Campo (SubType = Field).
 /// </summary>
 public sealed partial class SpellPanel : VBoxContainer
 {
@@ -19,7 +20,9 @@ public sealed partial class SpellPanel : VBoxContainer
     private readonly TypeRepository _typeRepo;
 
     private readonly OptionButton _subTypeCombo = new();
+    private readonly Label _subTypeHelp = EditorLayout.Hint("");
     private readonly OptionButton _effectCombo = new() { FitToLongestItem = false, ClipText = true };
+    private readonly MonsterEffectsEditor _effectsEditor;
 
     private readonly VBoxContainer _ritualSection;
     private readonly SpinBox _ritualMonsterIdBox = new() { MinValue = 0, MaxValue = 999999 };
@@ -46,18 +49,21 @@ public sealed partial class SpellPanel : VBoxContainer
     public event Action? FieldTypeEditorRequested;
 
     public string SelectedEffectId => SelectedEffectOption();
-    public bool IsRitual => SelectedItemText(_subTypeCombo, "Normal") == nameof(SpellSubType.Ritual);
+    public bool IsRitual => SelectedSubType() == nameof(SpellSubType.Ritual);
 
-    public SpellPanel(FieldTypeRepository fieldTypeRepo, TypeRepository typeRepo)
+    public SpellPanel(FieldTypeRepository fieldTypeRepo, TypeRepository typeRepo, EffectEditorContext effectContext)
     {
         _fieldTypeRepo = fieldTypeRepo;
         _typeRepo = typeRepo;
+        _effectsEditor = new MonsterEffectsEditor(effectContext, CardKind.Spell);
         AddThemeConstantOverride("separation", 8);
 
         var commonLayout = EditorLayout.TwoColumnLayout();
-        EditorLayout.AddRow(commonLayout, "SubType", _subTypeCombo);
-        EditorLayout.AddRow(commonLayout, "Efecto", _effectCombo);
+        EditorLayout.AddRow(commonLayout, "Subtipo", _subTypeCombo);
+        EditorLayout.AddRow(commonLayout, "Efecto heredado (antiguo)", _effectCombo);
         AddChild(commonLayout);
+        _subTypeHelp.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        AddChild(_subTypeHelp);
 
         var ritualSection = EditorLayout.Section("Solo para Magias de Ritual", out _ritualSection);
         var ritualLayout = EditorLayout.TwoColumnLayout();
@@ -79,7 +85,15 @@ public sealed partial class SpellPanel : VBoxContainer
         _fieldSectionRoot = fieldSection;
         AddChild(fieldSection);
 
-        foreach (string name in Enum.GetNames<SpellSubType>()) _subTypeCombo.AddItem(name);
+        var effectsSection = EditorLayout.Section("Efectos de la carta", out var effectsBody);
+        effectsBody.AddChild(_effectsEditor);
+        AddChild(effectsSection);
+
+        foreach (var subType in SpellTrapCatalog.SpellSubTypes)
+        {
+            _subTypeCombo.AddItem(subType.Label);
+            _subTypeCombo.SetItemMetadata(_subTypeCombo.ItemCount - 1, subType.Value.ToString());
+        }
         foreach (var option in EffectCatalog.Options) _effectCombo.AddItem(option.Label);
         foreach (string name in Enum.GetNames<ModifierDuration>()) _equipDurationCombo.AddItem(name);
         RefreshFieldTypeCombo();
@@ -117,6 +131,7 @@ public sealed partial class SpellPanel : VBoxContainer
     {
         _subTypeCombo.ItemSelected += _ => { UpdateVisibility(); RaiseChanged(); };
         _effectCombo.ItemSelected += _ => RaiseChanged();
+        _effectsEditor.Changed += RaiseChanged;
         _ritualMonsterIdBox.ValueChanged += _ => RaiseChanged();
         _requiredRitualLevelBox.ValueChanged += _ => RaiseChanged();
         _ritualFilter.FilterChanged += RaiseChanged;
@@ -146,9 +161,22 @@ public sealed partial class SpellPanel : VBoxContainer
         // Ritual en si (DuelEngine.RitualSummon), no algo compuesto/registrado.
         _effectCombo.Disabled = isRitual;
 
-        string subType = SelectedItemText(_subTypeCombo, "Normal");
+        string subType = SelectedSubType();
         _equipSectionRoot.Visible = subType == nameof(SpellSubType.Equip);
         _fieldSectionRoot.Visible = subType == nameof(SpellSubType.Field);
+        var info = SpellTrapCatalog.SpellSubTypes.FirstOrDefault(s => s.Value.ToString() == subType);
+        _subTypeHelp.Text = info?.Description ?? "";
+    }
+
+    /// <summary>El subtipo elegido, como nombre del enum (lo que se guarda).</summary>
+    private string SelectedSubType() =>
+        _subTypeCombo.Selected >= 0 ? _subTypeCombo.GetItemMetadata(_subTypeCombo.Selected).AsString() : nameof(SpellSubType.Normal);
+
+    private void SelectSubType(string value)
+    {
+        for (int i = 0; i < _subTypeCombo.ItemCount; i++)
+            if (string.Equals(_subTypeCombo.GetItemMetadata(i).AsString(), value, StringComparison.OrdinalIgnoreCase)) { _subTypeCombo.Selected = i; return; }
+        _subTypeCombo.Selected = 0;
     }
 
     /// <summary>Repuebla el combo de tipo de Campo.</summary>
@@ -205,7 +233,8 @@ public sealed partial class SpellPanel : VBoxContainer
     {
         _suppressEvents = true;
 
-        SelectComboText(_subTypeCombo, dto.SubType);
+        SelectSubType(dto.SubType);
+        _effectsEditor.LoadFrom(dto.Kind == "Spell" ? dto.MonsterEffects : new List<MonsterEffectDto>());
         _ritualMonsterIdBox.Value = dto.RitualMonsterId;
         _requiredRitualLevelBox.Value = dto.RequiredRitualLevel;
         _ritualFilter.SetFilter(dto.RitualFilter);
@@ -227,8 +256,9 @@ public sealed partial class SpellPanel : VBoxContainer
 
     public void ApplyTo(CardDto dto)
     {
-        dto.SubType = SelectedItemText(_subTypeCombo, "Normal");
+        dto.SubType = SelectedSubType();
         dto.EffectId = SelectedEffectId;
+        dto.MonsterEffects = _effectsEditor.GetEffects();
         dto.RitualMonsterId = (int)_ritualMonsterIdBox.Value;
         dto.RequiredRitualLevel = (int)_requiredRitualLevelBox.Value;
         dto.RitualFilter = _ritualFilter.GetFilter();

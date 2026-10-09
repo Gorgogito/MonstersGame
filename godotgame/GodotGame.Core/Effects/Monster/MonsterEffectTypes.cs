@@ -18,6 +18,14 @@ namespace GodotGame.Core.Effects.Monster;
 ///   voltearse boca arriba el Monstruo (por ataque, Invocacion por Volteo o efecto).
 /// - <see cref="Unclassified"/>: altera reglas de invocacion/posicion sin
 ///   iniciar Cadena (ej. Invocarse de Modo Especial pagando un costo).
+/// - <see cref="Activation"/>: solo Magias/Trampas. Es el efecto de la carta
+///   misma al activarse (con la Velocidad de Hechizo de su subtipo); lo que
+///   pasa despues con la carta depende del subtipo (Normal/Juego Rapido/Ritual
+///   van al Cementerio; Continua/Equipo/Campo se quedan en el Campo).
+///
+/// El mismo modelo se usa para las Cartas Magicas y de Trampa: una Magia
+/// Continua o de Campo puede tener efectos Continuos (pasivos mientras esta
+/// boca arriba), de Encendido o Disparados ademas de su efecto de activacion.
 /// </summary>
 public enum MonsterEffectType
 {
@@ -26,7 +34,18 @@ public enum MonsterEffectType
     Trigger,
     Quick,
     Flip,
-    Unclassified
+    Unclassified,
+    Activation
+}
+
+/// <summary>Sobre que carta tiene que ocurrir el evento de un efecto Disparado.</summary>
+public enum EventSubject
+{
+    /// <summary>"Si esta carta es ..."</summary>
+    ThisCard,
+
+    /// <summary>"Si un monstruo Demonio es descartado de tu mano ..." (otra carta, segun un filtro); esta carta debe estar en su zona de activacion.</summary>
+    AnyCard
 }
 
 /// <summary>
@@ -81,7 +100,10 @@ public enum EffectEvent
     StandbyPhase,
 
     /// <summary>Durante la End Phase de su controlador, si esta boca arriba en el Campo.</summary>
-    EndPhase
+    EndPhase,
+
+    /// <summary>Deja el Campo (destruida, desterrada, devuelta a la mano o al Deck, Sacrificada...).</summary>
+    LeavesField
 }
 
 /// <summary>Desde donde se puede activar un efecto de Encendido/Rapido/No clasificado ("esta carta" debe estar ahi).</summary>
@@ -132,5 +154,11 @@ public readonly record struct MoveCause(CauseKind Kind, PlayerSide? By = null, C
 /// Algo que le paso a una carta concreta y que puede disparar sus efectos.
 /// <paramref name="Controller"/> es quien la controla/posee DESPUES del evento
 /// (el lado de la Zona donde quedo, o el dueño de la mano/Cementerio/Destierro).
+///
+/// <paramref name="SummonedBy"/>/<paramref name="ControlledByOwner"/> solo
+/// importan cuando la carta dejo una Zona de Monstruos: como habia sido
+/// Invocada y si la controlaba su dueño (ej. "si esta carta Invocada por
+/// Fusion controlada por su dueño deja el Campo...").
 /// </summary>
-public sealed record TriggerEvent(EffectEvent Kind, Card Card, PlayerSide Controller, CardZone FromZone, CardZone ToZone, MoveCause Cause);
+public sealed record TriggerEvent(EffectEvent Kind, Card Card, PlayerSide Controller, CardZone FromZone, CardZone ToZone, MoveCause Cause,
+    SummonMethod? SummonedBy = null, bool ControlledByOwner = true);

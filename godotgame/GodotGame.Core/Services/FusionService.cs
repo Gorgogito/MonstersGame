@@ -36,6 +36,41 @@ public sealed class FusionService
         return _database.GetMonster(recipe.ResultId);
     }
 
+    /// <summary>
+    /// Todas las Fusiones posibles con cartas de <paramref name="pool"/>
+    /// (recetas de 2 materiales exactos y recetas genericas por filtro), con
+    /// las cartas concretas que usaria cada una. Lo usan los efectos que
+    /// "Invocan por Fusion" desde varias zonas (Campo, Cementerio, mano).
+    /// </summary>
+    public IReadOnlyList<(MonsterCard Result, IReadOnlyList<MonsterCard> Materials)> ResultsFor(IReadOnlyList<MonsterCard> pool)
+    {
+        var results = new List<(MonsterCard, IReadOnlyList<MonsterCard>)>();
+        foreach (var recipe in _recipes)
+        {
+            var result = _database.GetMonster(recipe.ResultId);
+            if (result == null) continue;
+
+            if (recipe.Requirement is { Mode: RequirementMode.MaterialSlots } requirement)
+            {
+                if (SlotEvaluator.TryMatch(requirement, pool, out var assignment) && assignment != null && assignment.UsedMaterials.Count > 0)
+                    results.Add((result, assignment.UsedMaterials));
+                continue;
+            }
+
+            for (int i = 0; i < pool.Count; i++)
+            {
+                for (int j = 0; j < pool.Count; j++)
+                {
+                    if (i == j || !recipe.Matches(pool[i].Id, pool[j].Id)) continue;
+                    results.Add((result, new[] { pool[i], pool[j] }));
+                    i = pool.Count;
+                    break;
+                }
+            }
+        }
+        return results;
+    }
+
     /// <summary>Indica si existe una fusion para el par de cartas dado.</summary>
     public bool CanFuse(MonsterCard a, MonsterCard b) => TryFuse(a, b) != null;
 

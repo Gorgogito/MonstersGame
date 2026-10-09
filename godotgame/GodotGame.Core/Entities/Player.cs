@@ -43,6 +43,19 @@ public sealed class Player
     /// <summary>Indica si ya realizo su Invocacion Normal / Colocacion este turno.</summary>
     public bool HasNormalSummonedThisTurn { get; set; }
 
+    /// <summary>
+    /// Verdadero si este turno ya Invoco algun monstruo (Normal, por Volteo o
+    /// de Modo Especial; Colocar no cuenta). Para condiciones como "no puedes
+    /// activar esta carta si Invocaste este turno".
+    /// </summary>
+    public bool HasSummonedThisTurn { get; set; }
+
+    /// <summary>
+    /// "No puedes Invocar monstruos el resto de este turno" (pero si Colocar):
+    /// lo pone un efecto y se levanta al empezar el turno siguiente.
+    /// </summary>
+    public bool CannotSummonThisTurn { get; set; }
+
     public Player(PlayerSide side, string name)
     {
         Side = side;

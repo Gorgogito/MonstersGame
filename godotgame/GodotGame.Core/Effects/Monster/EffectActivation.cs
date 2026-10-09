@@ -40,8 +40,35 @@ public sealed class EffectActivation
     /// <summary>Cartas afectadas por el ultimo paso ejecutado (ej. la carta descartada).</summary>
     public List<Card> LastAffected { get; } = new();
 
+    /// <summary>
+    /// Donde quedaron las cartas afectadas por el ultimo paso, cuando el paso
+    /// lo sabe (ej. la carta mirada al azar de la mano rival), para los pasos
+    /// con "Usar las cartas del paso anterior" ("si es un monstruo, Invocalo").
+    /// </summary>
+    public List<CardRef> LastAffectedRefs { get; } = new();
+
+    /// <summary>Cuantas cartas de cada jugador afecto el ultimo paso ("cada jugador roba tantas como descarto").</summary>
+    public Dictionary<PlayerSide, int> LastAffectedBySide { get; } = new();
+
     /// <summary>Solo al resolverse en la Cadena: niega el eslabon al que responde (efecto Rapido de negacion).</summary>
     public Action? NegateRespondedLink { get; set; }
+
+    /// <summary>
+    /// Solo al resolverse en la Cadena: cambia el efecto del eslabon al que
+    /// responde por "Tu adversario descarta N carta(s)" (N = el argumento).
+    /// </summary>
+    public Action<int>? ReplaceRespondedLink { get; set; }
+
+    /// <summary>
+    /// El eslabon de la Cadena al que respondia este efecto al activarse
+    /// (indice en <see cref="Battle.DuelState.Chain"/>), o null si inicio la Cadena.
+    /// </summary>
+    public ChainLinkInfo? RespondingTo { get; set; }
+
+    /// <summary>Velocidad de Hechizo: la de la carta si es el efecto de activacion de una Magia/Trampa, si no la del tipo de efecto.</summary>
+    public int SpellSpeed => Effect.Type == MonsterEffectType.Activation
+        ? Source switch { SpellCard s => s.SpellSpeed, TrapCard t => t.SpellSpeed, _ => 1 }
+        : Effect.SpellSpeed;
 
     public EffectActivation(Card source, MonsterEffect effect, int effectIndex, PlayerSide controller, CardRef sourceRef)
     {
@@ -71,6 +98,13 @@ public sealed class EffectActivation
     public bool DiscardedByCardEffect =>
         Trigger is { } t && t.FromZone == CardZone.Hand && t.Cause.Kind == CauseKind.Effect;
 }
+
+/// <summary>
+/// Lo que se sabe del eslabon al que responde un efecto: quien lo activo, si
+/// es un efecto de Monstruo y la carta (para condiciones como "cuando tu
+/// adversario activa el efecto de un monstruo o una Magia/Trampa Normal").
+/// </summary>
+public sealed record ChainLinkInfo(int Index, PlayerSide Controller, Card? Card, bool IsMonsterEffect);
 
 /// <summary>Todo lo que un paso de efecto de Monstruo necesita para ejecutarse.</summary>
 public sealed class MonsterEffectContext
@@ -103,6 +137,7 @@ public sealed class MonsterEffectContext
     {
         ChooserKind.Opponent => OpponentSide,
         ChooserKind.Owner => owner,
+        ChooserKind.OwnersOpponent => owner == PlayerSide.Human ? PlayerSide.Cpu : PlayerSide.Human,
         _ => ControllerSide
     };
 

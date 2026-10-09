@@ -128,7 +128,9 @@ public sealed partial class CardPreview : Control
 
         string title = monster
             ? $"[{_dto.Attribute} / {_dto.Type}]"
-            : $"[{(_dto.Kind.Equals("Trap", StringComparison.OrdinalIgnoreCase) ? "Trampa" : "Magia")} / {_dto.SubType}]";
+            : _dto.Kind.Equals("Trap", StringComparison.OrdinalIgnoreCase)
+                ? $"[Trampa {(Enum.TryParse<GodotGame.Core.Entities.TrapSubType>(_dto.SubType, true, out var trap) ? GodotGame.Core.Effects.Monster.SpellTrapCatalog.TrapSubTypeLabel(trap) : _dto.SubType)}]"
+                : $"[Mágica {(Enum.TryParse<GodotGame.Core.Entities.SpellSubType>(_dto.SubType, true, out var spell) ? GodotGame.Core.Effects.Monster.SpellTrapCatalog.SpellSubTypeLabel(spell) : _dto.SubType)}]";
         DrawString(_font, inner.Position + new Vector2(0, 14), title, HorizontalAlignment.Left, inner.Size.X, 13, BoxText);
 
         string? footer = monster ? $"ATK {_dto.Attack} / DEF {_dto.Defense}" : null;

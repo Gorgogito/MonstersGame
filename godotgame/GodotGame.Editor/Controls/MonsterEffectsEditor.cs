@@ -162,6 +162,12 @@ internal sealed partial class ParamForm : GridContainer
             }
             case ParamType.MonsterType:
                 return TextCombo(values, info.Key, current, "(cualquiera)", _context.Types());
+            case ParamType.Text:
+            {
+                var edit = new LineEdit { Text = current, PlaceholderText = "(vacío = cualquiera)" };
+                edit.TextChanged += text => Set(values, info.Key, text);
+                return edit;
+            }
             case ParamType.Attribute:
                 return TextCombo(values, info.Key, current, "(cualquiera)", Enum.GetNames<MonsterAttribute>());
             default:
@@ -431,30 +437,35 @@ internal sealed partial class StepListEditor : VBoxContainer
 }
 
 /// <summary>
-/// Editor de los efectos de una carta de Monstruo: lista de efectos y, para
-/// el elegido, su tipo (con la explicacion de cada clasificacion), cuando o
-/// desde donde se activa, condiciones, objetivos, costos y pasos. Todo se
-/// arma a partir de <see cref="MonsterEffectCatalog"/>, asi que una accion o
-/// condicion nueva del motor aparece aqui sin tocar este control.
+/// Editor de los efectos por datos de una carta (Monstruo, Magia o Trampa):
+/// lista de efectos y, para el elegido, su tipo (con la explicacion de cada
+/// clasificacion), cuando o desde donde se activa, condiciones, objetivos,
+/// costos y pasos. Todo se arma a partir de <see cref="MonsterEffectCatalog"/>,
+/// asi que una accion o condicion nueva del motor aparece aqui sin tocar este
+/// control. <see cref="SetCardKind"/> decide que tipos de efecto se ofrecen.
 /// </summary>
 public sealed partial class MonsterEffectsEditor : VBoxContainer
 {
     private readonly EffectEditorContext _context;
     private readonly ItemList _list = new() { CustomMinimumSize = new Vector2(0, 90), SizeFlagsHorizontal = SizeFlags.ExpandFill };
     private readonly VBoxContainer _detail = new();
+    private readonly Label _hint;
     private List<MonsterEffectDto> _effects = new();
     private int _selected = -1;
     private bool _building;
+    private CardKind _kind = CardKind.Monster;
 
     public event Action? Changed;
 
-    public MonsterEffectsEditor(EffectEditorContext context)
+    public MonsterEffectsEditor(EffectEditorContext context, CardKind kind = CardKind.Monster)
     {
         _context = context;
         AddThemeConstantOverride("separation", 6);
 
-        AddChild(EditorLayout.Hint("Cada efecto se clasifica como Continuo, de Encendido, Disparado, Rápido, de Volteo o No clasificado. Un monstruo puede tener varios. Elige uno de la lista para editarlo."));
+        _hint = EditorLayout.Hint("");
+        AddChild(_hint);
         AddChild(_list);
+        SetCardKind(kind);
 
         var buttons = new HBoxContainer();
         foreach (var (text, action) in new (string, Action)[]
@@ -474,6 +485,18 @@ public sealed partial class MonsterEffectsEditor : VBoxContainer
     }
 
     public int Count => _effects.Count;
+
+    /// <summary>Que clase de carta se edita: cambia los tipos de efecto que se ofrecen y la ayuda.</summary>
+    public void SetCardKind(CardKind kind)
+    {
+        _kind = kind;
+        _hint.Text = kind == CardKind.Monster
+            ? "Cada efecto se clasifica como Continuo, de Encendido, Disparado, Rápido, de Volteo o No clasificado. Un monstruo puede tener varios. Elige uno de la lista para editarlo."
+            : "\"Al activar la carta\" es lo que hace la carta al jugarse (como mucho uno). Además puede tener efectos Continuos (mientras esté boca arriba en el Campo), de Encendido (ej. desde el Cementerio), Disparados (\"si un monstruo es descartado...\") o Rápidos. Elige uno de la lista para editarlo.";
+        if (IsInsideTree()) BuildDetail();
+    }
+
+    private IReadOnlyList<MonsterEffectType> AllowedTypes => SpellTrapCatalog.AllowedTypes(_kind);
 
     public void LoadFrom(IEnumerable<MonsterEffectDto> effects)
     {
@@ -506,7 +529,9 @@ public sealed partial class MonsterEffectsEditor : VBoxContainer
 
     private void OnAdd()
     {
-        _effects.Add(new MonsterEffectDto { Type = nameof(MonsterEffectType.Ignition), ActivationZone = nameof(EffectZone.Field) });
+        bool spellOrTrap = _kind != CardKind.Monster;
+        var type = spellOrTrap && !_effects.Any(e => e.Type == nameof(MonsterEffectType.Activation)) ? MonsterEffectType.Activation : MonsterEffectType.Ignition;
+        _effects.Add(new MonsterEffectDto { Type = type.ToString(), ActivationZone = nameof(EffectZone.Field) });
         _selected = _effects.Count - 1;
         RaiseChanged();
         BuildDetail();
@@ -558,7 +583,7 @@ public sealed partial class MonsterEffectsEditor : VBoxContainer
         // ---- Tipo
         var grid = EditorLayout.TwoColumnLayout();
         var typeCombo = EffectEditorUi.Combo();
-        foreach (var t in MonsterEffectCatalog.Types) typeCombo.AddItem(t.Label, (int)t.Value);
+        foreach (var t in MonsterEffectCatalog.Types.Where(t => AllowedTypes.Contains(t.Value) || t.Value == type)) typeCombo.AddItem(t.Label, (int)t.Value);
         typeCombo.Selected = typeCombo.GetItemIndex((int)type);
         typeCombo.ItemSelected += i =>
         {
@@ -578,8 +603,15 @@ public sealed partial class MonsterEffectsEditor : VBoxContainer
         root.AddChild(EffectEditorUi.Description(MonsterEffectCatalog.Types.First(t => t.Value == type).Description));
 
         var when = EditorLayout.TwoColumnLayout();
+        var subject = CardDtoMapper.ParseEnum(effect.Subject, EventSubject.ThisCard);
         if (type == MonsterEffectType.Trigger)
         {
+            var subjectCombo = EffectEditorUi.Combo();
+            foreach (var option in MonsterEffectCatalog.Subjects) subjectCombo.AddItem(option.Label, (int)option.Value);
+            subjectCombo.Selected = subjectCombo.GetItemIndex((int)subject);
+            subjectCombo.ItemSelected += i => { effect.Subject = ((EventSubject)subjectCombo.GetItemId((int)i)).ToString(); RaiseChanged(); BuildDetail(); };
+            EditorLayout.AddRow(when, "Sobre qué carta", subjectCombo);
+
             var eventCombo = EffectEditorUi.Combo();
             var events = MonsterEffectCatalog.Events.Where(e => e.Value != EffectEvent.Flipped).ToList();
             for (int i = 0; i < events.Count; i++) eventCombo.AddItem(events[i].Label, (int)events[i].Value);
@@ -588,7 +620,16 @@ public sealed partial class MonsterEffectsEditor : VBoxContainer
             eventCombo.Selected = idx >= 0 ? idx : 0;
             if (idx < 0) effect.TriggerEvent = events[0].Value.ToString();
             eventCombo.ItemSelected += i => { effect.TriggerEvent = ((EffectEvent)eventCombo.GetItemId((int)i)).ToString(); RaiseChanged(); BuildDetail(); };
-            EditorLayout.AddRow(when, "Se activa cuando esta carta...", eventCombo);
+            EditorLayout.AddRow(when, subject == EventSubject.AnyCard ? "Se activa cuando esa carta..." : "Se activa cuando esta carta...", eventCombo);
+
+            if (subject == EventSubject.AnyCard)
+            {
+                var watchZone = EffectEditorUi.Combo();
+                foreach (var z in MonsterEffectCatalog.Zones) watchZone.AddItem(z.Label, (int)z.Value);
+                watchZone.Selected = watchZone.GetItemIndex((int)CardDtoMapper.ParseEnum(effect.ActivationZone, EffectZone.Field));
+                watchZone.ItemSelected += i => { effect.ActivationZone = ((EffectZone)watchZone.GetItemId((int)i)).ToString(); RaiseChanged(); };
+                EditorLayout.AddRow(when, "Esta carta tiene que estar en", watchZone);
+            }
 
             var optional = new CheckBox { Text = "Opcional (\"puedes ...\")", TooltipText = "Se le pregunta al jugador si quiere activarlo.", ButtonPressed = effect.Optional };
             optional.Toggled += on => { effect.Optional = on; RaiseChanged(); };
@@ -605,14 +646,32 @@ public sealed partial class MonsterEffectsEditor : VBoxContainer
         }
         if (type != MonsterEffectType.Continuous)
         {
-            var opt = new CheckBox { Text = "Solo una vez por turno (por nombre de carta)", ButtonPressed = effect.OncePerTurn };
+            var opt = new CheckBox
+            {
+                Text = type == MonsterEffectType.Activation ? "Solo puedes activar 1 carta con este nombre por turno" : "Solo una vez por turno (por nombre de carta)",
+                ButtonPressed = effect.OncePerTurn
+            };
             opt.Toggled += on => { effect.OncePerTurn = on; RaiseChanged(); };
             EditorLayout.AddRow(when, "Límite", opt);
         }
         if (when.GetChildCount() > 0) root.AddChild(when);
 
         if (type == MonsterEffectType.Trigger)
+        {
+            root.AddChild(EffectEditorUi.Description(MonsterEffectCatalog.Subjects.First(o => o.Value == subject).Description));
             root.AddChild(EffectEditorUi.Description(MonsterEffectCatalog.Events.First(e => e.Value == CardDtoMapper.ParseEnum(effect.TriggerEvent, EffectEvent.None)).Description));
+            if (subject == EventSubject.AnyCard)
+            {
+                var filterBox = new VBoxContainer();
+                filterBox.AddChild(EffectEditorUi.Header("Qué carta tiene que sufrir el evento"));
+                filterBox.AddChild(EffectEditorUi.Description("Ej. \"un monstruo Demonio de tu mano\": De quién = Tuyas, Clase = Monstruo, Tipo = Demonio. Para \"por efecto de una carta 'Mundo Oscuro' o del adversario\" usa la condición \"El evento fue causado por ...\"."));
+                var filterForm = new ParamForm(_context);
+                filterForm.Build(MonsterEffectCatalog.EventFilterParams, effect.EventFilter);
+                filterForm.Changed += RaiseChanged;
+                filterBox.AddChild(filterForm);
+                root.AddChild(EffectEditorUi.Box(filterBox));
+            }
+        }
         else if (type is MonsterEffectType.Ignition or MonsterEffectType.Quick or MonsterEffectType.Unclassified)
             root.AddChild(EffectEditorUi.Description(MonsterEffectCatalog.Zones.First(z => z.Value == CardDtoMapper.ParseEnum(effect.ActivationZone, EffectZone.Field)).Description));
 

@@ -83,8 +83,28 @@ public static class CardDtoValidator
 
         if (dto.MonsterEffects.Count > 0 && category == MonsterCategory.Normal)
             errors.Add("Un Monstruo Normal no tiene efectos: cambia la Categoria a Effect (o Fusion/Ritual).");
+        ValidateCardEffects(dto, CardKind.Monster, errors);
+    }
+
+    /// <summary>Valida la lista de efectos por datos de la carta segun su clase (tipos admitidos, un solo efecto "al activar").</summary>
+    private static void ValidateCardEffects(CardDto dto, CardKind kind, List<string> errors)
+    {
+        var allowed = GodotGame.Core.Effects.Monster.SpellTrapCatalog.AllowedTypes(kind);
+        int activations = 0;
         for (int i = 0; i < dto.MonsterEffects.Count; i++)
-            ValidateMonsterEffect(dto.MonsterEffects[i], $"Efecto {i + 1}", errors);
+        {
+            var effect = dto.MonsterEffects[i];
+            string label = $"Efecto {i + 1}";
+            if (Enum.TryParse<GodotGame.Core.Effects.Monster.MonsterEffectType>(effect.Type, true, out var type))
+            {
+                if (!allowed.Contains(type))
+                    errors.Add($"{label}: una carta de {(kind == CardKind.Monster ? "Monstruo" : kind == CardKind.Spell ? "Magia" : "Trampa")} no puede tener un efecto \"{GodotGame.Core.Effects.Monster.MonsterEffectCatalog.TypeLabel(type)}\".");
+                if (type == GodotGame.Core.Effects.Monster.MonsterEffectType.Activation) activations++;
+            }
+            ValidateMonsterEffect(effect, label, errors);
+        }
+        if (activations > 1)
+            errors.Add("Una carta solo puede tener un efecto \"Al activar la carta\" (los demás deben ser Continuos, de Encendido, Disparados o Rápidos).");
     }
 
     /// <summary>Valida un efecto de Monstruo compuesto: tipo, evento/zona, pasos y condiciones conocidos y coherentes con su uso.</summary>
@@ -100,6 +120,9 @@ public static class CardDtoValidator
         if (type == GodotGame.Core.Effects.Monster.MonsterEffectType.Trigger
             && (!Enum.TryParse<GodotGame.Core.Effects.Monster.EffectEvent>(effect.TriggerEvent, true, out var evt) || evt == GodotGame.Core.Effects.Monster.EffectEvent.None))
             errors.Add($"{label}: un efecto Disparado necesita un evento que lo dispare.");
+        if (type == GodotGame.Core.Effects.Monster.MonsterEffectType.Trigger
+            && !Enum.TryParse<GodotGame.Core.Effects.Monster.EventSubject>(effect.Subject, true, out _))
+            errors.Add($"{label}: \"{effect.Subject}\" no es una opción válida de \"sobre qué carta\".");
         if (type is GodotGame.Core.Effects.Monster.MonsterEffectType.Ignition or GodotGame.Core.Effects.Monster.MonsterEffectType.Quick or GodotGame.Core.Effects.Monster.MonsterEffectType.Unclassified
             && !Enum.TryParse<GodotGame.Core.Effects.Monster.EffectZone>(effect.ActivationZone, true, out _))
             errors.Add($"{label}: zona de activacion \"{effect.ActivationZone}\" no reconocida.");
@@ -196,6 +219,7 @@ public static class CardDtoValidator
         else
         {
             ValidateEffectIdOrComposedEffect(dto, errors);
+            ValidateCardEffects(dto, CardKind.Spell, errors);
 
             if (subType == SpellSubType.Equip)
                 ValidateEquip(dto, errors);
@@ -218,6 +242,7 @@ public static class CardDtoValidator
             errors.Add($"SubType \"{dto.SubType}\" no reconocido para una Trampa.");
 
         ValidateEffectIdOrComposedEffect(dto, errors);
+        ValidateCardEffects(dto, CardKind.Trap, errors);
     }
 
     /// <summary>

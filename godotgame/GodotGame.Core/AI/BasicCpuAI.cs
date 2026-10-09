@@ -90,20 +90,33 @@ public sealed class BasicCpuAI : IDuelAI
     }
 
     /// <summary>
-    /// Heuristica "honesta" para la Prioridad de la Cadena: hoy la CPU nunca
-    /// Coloca ni activa Magias/Trampas por su cuenta (ver <see cref="MainStep"/>),
-    /// asi que en la practica siempre pasa. Se deja preparado para el dia en
-    /// que la IA sepa jugar Magias/Trampas: entonces bastara con que este
-    /// metodo elija encadenar en vez de pasar cuando tenga algo legal.
+    /// Prioridad en una Cadena: solo responde a algo del rival, con un efecto
+    /// Rapido propio o con una Trampa/Magia de Juego Rapido Colocada que tenga
+    /// efecto por datos (las heredadas con objetivo no se activan solas).
     /// </summary>
     private bool RespondToChain(DuelEngine engine)
     {
-        // Un efecto Rapido propio solo para responder a algo del rival.
         var state = engine.State;
         var mySide = state.ChainPendingResponder!.Value;
-        if (state.Chain[^1].Controller != mySide && TryActivateEffect(engine, mySide, quickOnly: true))
-            return true;
+        if (state.Chain[^1].Controller == mySide) return engine.PassPriority().Success;
+        if (TryActivateEffect(engine, mySide, quickOnly: true)) return true;
+        if (TryActivateSetCard(engine, mySide)) return true;
         return engine.PassPriority().Success;
+    }
+
+    /// <summary>Activa la primera carta Colocada con efecto por datos que se pueda activar ahora.</summary>
+    private bool TryActivateSetCard(DuelEngine engine, PlayerSide mySide)
+    {
+        var me = engine.State.GetPlayer(mySide);
+        for (int zone = 0; zone < me.SpellTrapZones.Length; zone++)
+        {
+            var instance = me.SpellTrapZones[zone];
+            if (instance == null || instance.FaceUp || instance.Card.ActivationEffect == null) continue;
+            string key = $"set:{instance.Card.Id}:{zone}";
+            if (!_effectsTriedThisTurn.Add(key)) continue;
+            if (engine.ActivateSetCard(zone).Success) return true;
+        }
+        return false;
     }
 
     /// <summary>Activa el primer efecto de Monstruo disponible que no haya intentado ya este turno.</summary>
@@ -131,8 +144,11 @@ public sealed class BasicCpuAI : IDuelAI
         {
             case ChoiceKind.YesNo:
                 return engine.AnswerYesNo(true).Success;
+            case ChoiceKind.Reveal:
+                return engine.AcknowledgeReveal().Success;
             case ChoiceKind.SelectOption:
-                return engine.AnswerOption(0).Success;
+                // Ventana de respuesta a un ataque: la opcion 0 es "No activar nada".
+                return engine.AnswerOption(choice.IsResponseWindow && choice.Options.Count > 1 ? 1 : 0).Success;
         }
 
         var ranked = choice.Candidates
@@ -180,17 +196,58 @@ public sealed class BasicCpuAI : IDuelAI
         // Efectos de Encendido / No clasificados disponibles (buscar, Invocarse, etc.).
         if (TryActivateEffect(engine, me.Side, quickOnly: false)) return true;
 
+        // Magias con efecto por datos (y de Campo) desde la mano.
+        if (TryActivateSpellFromHand(engine, me)) return true;
+
         if (!me.HasNormalSummonedThisTurn && me.FirstFreeMonsterZone() != -1)
         {
             if (TryBestFusion(engine, me)) return true;
             if (TryBestSummon(engine, me, opp)) return true;
         }
 
+        // Trampas y Magias de Juego Rapido: se Colocan para usarlas en el turno rival.
+        if (TrySetForLater(engine, me)) return true;
+
         // Sin mas jugadas de invocacion: avanzar de fase o terminar el turno.
         if (state.Phase == DuelPhase.Main1)
             return Advance(engine);
 
         engine.EndTurn();
+        return false;
+    }
+
+    /// <summary>
+    /// Activa la primera Magia de la mano que tenga efecto por datos (o una
+    /// de Campo si no tiene ninguna) y que el motor acepte ahora. Las
+    /// heredadas que piden objetivo (Equipo, "destruye 1 monstruo") no se
+    /// activan solas.
+    /// </summary>
+    private bool TryActivateSpellFromHand(DuelEngine engine, Player me)
+    {
+        for (int i = 0; i < me.Hand.Count; i++)
+        {
+            if (me.Hand[i] is not SpellCard spell) continue;
+            bool useful = spell.ActivationEffect != null
+                          || (spell.SubType == SpellSubType.Field && me.FieldZone == null)
+                          || (spell.SubType == SpellSubType.Continuous && spell.Effects.Count > 0);
+            if (!useful || spell.SubType is SpellSubType.Ritual or SpellSubType.Equip) continue;
+            string key = $"hand:{spell.Id}";
+            if (!_effectsTriedThisTurn.Add(key)) continue;
+            if (engine.ActivateSpell(i).Success) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Coloca una Trampa o Magia de Juego Rapido con efecto por datos (como mucho una por paso).</summary>
+    private bool TrySetForLater(DuelEngine engine, Player me)
+    {
+        if (me.FirstFreeSpellTrapZone() == -1) return false;
+        for (int i = 0; i < me.Hand.Count; i++)
+        {
+            bool settable = me.Hand[i] is TrapCard { ActivationEffect: not null } or SpellCard { SubType: SpellSubType.QuickPlay, ActivationEffect: not null };
+            if (!settable) continue;
+            if (engine.SetSpellOrTrap(i).Success) return true;
+        }
         return false;
     }
 

@@ -46,8 +46,10 @@ public static class CardDtoMapper
                 equipDefenseModifier: equipDefenseModifier,
                 equipDuration: equipDuration,
                 equipDurationTurns: equipDurationTurns,
-                fieldType: fieldType),
-            "trap" => new TrapCard(dto.Id, dto.Name, ParseEnum(dto.SubType, TrapSubType.Normal), dto.EffectId, dto.Image, dto.Description),
+                fieldType: fieldType,
+                effects: MonsterEffectMapper.ToEffects(dto.MonsterEffects)),
+            "trap" => new TrapCard(dto.Id, dto.Name, ParseEnum(dto.SubType, TrapSubType.Normal), dto.EffectId, dto.Image, dto.Description,
+                MonsterEffectMapper.ToEffects(dto.MonsterEffects)),
             _ => new MonsterCard(
                 dto.Id,
                 dto.Name,

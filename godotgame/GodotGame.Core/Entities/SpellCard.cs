@@ -3,8 +3,15 @@ using GodotGame.Core.Requirements;
 namespace GodotGame.Core.Entities;
 
 /// <summary>
-/// Carta Magica. El campo <see cref="EffectId"/> apunta a un efecto resoluble
-/// por un sistema de efectos (aun no implementado: Bloque 5 de la adaptacion).
+/// Carta Magica. Su efecto puede venir de <see cref="Card.Effects"/> (efectos
+/// compuestos por datos: al activarse, Continuo, de Encendido, Disparado...)
+/// o, en las cartas antiguas, del <see cref="EffectId"/> heredado.
+///
+/// El subtipo decide como se juega (ver <c>SpellTrapCatalog</c>):
+/// Normal (se resuelve y va al Cementerio), Continua (se queda boca arriba),
+/// de Equipo (se equipa a un Monstruo), de Campo (Zona del Campo, afecta a
+/// ambos jugadores), de Juego Rapido (Velocidad 2: en el turno rival si se
+/// Coloco antes) y de Ritual (Invocacion Ritual).
 /// </summary>
 public sealed class SpellCard : Card
 {
@@ -95,8 +102,9 @@ public sealed class SpellCard : Card
         int equipDefenseModifier = 0,
         ModifierDuration equipDuration = ModifierDuration.WhileEquipped,
         int equipDurationTurns = 0,
-        FieldType? fieldType = null)
-        : base(id, name, image, description)
+        FieldType? fieldType = null,
+        IReadOnlyList<GodotGame.Core.Effects.Monster.MonsterEffect>? effects = null)
+        : base(id, name, image, description, effects)
     {
         SubType = subType;
         EffectId = effectId ?? string.Empty;

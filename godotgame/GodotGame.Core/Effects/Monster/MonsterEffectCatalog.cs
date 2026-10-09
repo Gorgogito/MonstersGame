@@ -3,7 +3,7 @@ using GodotGame.Core.Entities;
 namespace GodotGame.Core.Effects.Monster;
 
 /// <summary>Tipo de un parametro (decide que control muestra el editor).</summary>
-public enum ParamType { Int, Bool, Choice, Zones, Card, MonsterType, Attribute }
+public enum ParamType { Int, Bool, Choice, Zones, Card, MonsterType, Attribute, Text }
 
 public sealed record ParamOption(string Value, string Label);
 
@@ -34,7 +34,8 @@ public sealed record ConditionInfo(string Kind, string Label, string Description
 public sealed record EnumLabel<T>(T Value, string Label, string Description) where T : struct;
 
 /// <summary>
-/// Catalogo de todo lo que se puede usar para componer un efecto de Monstruo:
+/// Catalogo de todo lo que se puede usar para componer un efecto de carta
+/// (de Monstruo, Magia o Trampa):
 /// tipos de efecto, eventos disparadores, zonas de activacion, pasos (con sus
 /// parametros) y condiciones. Es la fuente de verdad comun del motor (que
 /// ejecuta los pasos) y del editor de cartas (que arma los formularios a
@@ -59,6 +60,8 @@ public static class MonsterEffectCatalog
             "Subcategoría de los Disparados. Se activa obligatoriamente en el momento en que el monstruo es volteado boca arriba (por un ataque, por Invocación por Volteo o por un efecto)."),
         new(MonsterEffectType.Unclassified, "No clasificado",
             "Altera reglas de invocación o posición sin iniciar una Cadena; por ejemplo, un monstruo que puede Invocarse de Modo Especial desde la mano o el Cementerio pagando una condición."),
+        new(MonsterEffectType.Activation, "Al activar la carta",
+            "Solo Mágicas y Trampas: lo que hace la carta al activarse (\"Selecciona ...; destrúyelo\", \"Roba 2 cartas\"). Entra en la Cadena con la Velocidad de su subtipo. Después, una Normal / de Juego Rápido / Trampa Normal va al Cementerio; una Continua, de Equipo o de Campo se queda en el Campo. Una carta tiene como mucho uno."),
     };
 
     public static readonly IReadOnlyList<EnumLabel<EffectEvent>> Events = new EnumLabel<EffectEvent>[]
@@ -78,11 +81,18 @@ public static class MonsterEffectCatalog
         new(EffectEvent.InflictsBattleDamage, "Inflige daño de batalla a tu adversario", ""),
         new(EffectEvent.StandbyPhase, "Durante tu Standby Phase", "Si está boca arriba en el Campo."),
         new(EffectEvent.EndPhase, "Durante tu End Phase", "Si está boca arriba en el Campo."),
+        new(EffectEvent.LeavesField, "Deja el Campo", "Destruida, desterrada, devuelta a la mano o al Deck, Sacrificada... Combínalo con la condición \"El evento fue causado por ...\" para \"a causa de una carta del adversario\"."),
+    };
+
+    public static readonly IReadOnlyList<EnumLabel<EventSubject>> Subjects = new EnumLabel<EventSubject>[]
+    {
+        new(EventSubject.ThisCard, "Esta carta", "\"Si esta carta es ...\". Se activa desde donde quede la carta después del evento."),
+        new(EventSubject.AnyCard, "Otra carta que cumpla el filtro", "\"Si un monstruo Demonio es descartado de tu mano ...\". Esta carta tiene que estar en su zona de activación (ej. boca arriba en el Campo) cuando ocurre el evento."),
     };
 
     public static readonly IReadOnlyList<EnumLabel<EffectZone>> Zones = new EnumLabel<EffectZone>[]
     {
-        new(EffectZone.Field, "Campo (boca arriba)", "Esta carta debe estar boca arriba en tu Zona de Monstruos."),
+        new(EffectZone.Field, "Campo (boca arriba)", "Esta carta debe estar boca arriba en tu Campo: en la Zona de Monstruos si es un monstruo, o en la Zona de Magia/Trampa o del Campo si es Mágica/Trampa."),
         new(EffectZone.Hand, "Mano", "Esta carta debe estar en tu mano (ej. \"Puedes descartar esta carta...\", \"Puedes mostrar esta carta...\")."),
         new(EffectZone.Graveyard, "Cementerio", "Esta carta debe estar en tu Cementerio."),
         new(EffectZone.Banished, "Desterrada", "Esta carta debe estar desterrada."),
@@ -91,6 +101,9 @@ public static class MonsterEffectCatalog
     public static string TypeLabel(MonsterEffectType type) => Types.First(t => t.Value == type).Label;
     public static string EventLabel(EffectEvent evt) => Events.FirstOrDefault(e => e.Value == evt)?.Label ?? evt.ToString();
     public static string ZoneLabel(EffectZone zone) => Zones.First(z => z.Value == zone).Label;
+    public static string SubjectLabel(EventSubject subject) => Subjects.First(s => s.Value == subject).Label;
+
+    public static string ExcavateLabel(ExcavateAction action) => ExcavateOptions.First(o => o.Value == action.ToString()).Label;
 
     // ------------------------------------------------------------------ Parametros comunes
 
@@ -104,11 +117,23 @@ public static class MonsterEffectCatalog
     private static readonly ParamOption[] KindOptions = { new("Any", "Cualquier carta"), new("Monster", "Monstruo"), new("Spell", "Mágica"), new("Trap", "Trampa"), new("SpellTrap", "Mágica o Trampa") };
     private static readonly ParamOption[] FaceOptions = { new("Any", "Cualquiera"), new("FaceUp", "Boca arriba"), new("FaceDown", "Boca abajo (Colocada)") };
     private static readonly ParamOption[] WhoOptions = { new("Controller", "Tú"), new("Opponent", "Tu adversario"), new("Both", "Ambos jugadores") };
-    private static readonly ParamOption[] ChooserOptions = { new("Controller", "Tú (quien controla el efecto)"), new("Opponent", "Tu adversario"), new("Owner", "El dueño de las cartas"), new("Random", "Al azar") };
+    private static readonly ParamOption[] ChooserOptions = { new("Controller", "Tú (quien controla el efecto)"), new("Opponent", "Tu adversario"), new("Owner", "El dueño de las cartas"), new("OwnersOpponent", "El adversario del dueño"), new("Random", "Al azar") };
     private static readonly ParamOption[] FieldOptions = { new("Own", "Tu Campo"), new("Opponent", "Campo del adversario"), new("Choose", "Cualquier Campo (eliges al resolver)") };
     private static readonly ParamOption[] PositionOptions = { new("Attack", "Ataque"), new("Defense", "Defensa"), new("Choose", "A elección") };
     private static readonly ParamOption[] DurationOptions = { new("Permanent", "Mientras siga en el Campo"), new("UntilEndOfTurn", "Hasta el final del turno") };
-    private static readonly ParamOption[] ApplyOptions = { new("Self", "Esta carta"), new("Targets", "Los objetivos seleccionados"), new("Select", "Elegir al resolver"), new("AllMatching", "Todos los que cumplan el filtro") };
+    private static readonly ParamOption[] ApplyOptions = { new("Self", "Esta carta"), new("Targets", "Los objetivos seleccionados"), new("Select", "Elegir al resolver"), new("AllMatching", "Todos los que cumplan el filtro"), new("LastAffected", "Las cartas del paso anterior") };
+    private static readonly ParamOption[] PassiveApplyOptions = { new("Self", "Esta carta"), new("Equipped", "El monstruo equipado (Mágica de Equipo)"), new("AllMatching", "Todos los que cumplan el filtro") };
+    private static readonly ParamOption[] ScaleOptions = { new("None", "Tal cual"), new("PerLastAffected", "× cada carta afectada en el paso anterior (o el costo)"), new("LastAffectedLevel", "× el Nivel de la carta del paso anterior") };
+    private static readonly ParamOption[] SubTypeOptions =
+    {
+        new("Any", "Cualquiera"), new("Normal", "Normal"), new("Continuous", "Continua"), new("Equip", "De Equipo"), new("Field", "De Campo"),
+        new("QuickPlay", "De Juego Rápido"), new("Ritual", "De Ritual"), new("Counter", "De Contraefecto"),
+    };
+    private static readonly ParamOption[] ExcavateOptions = { new("SetOnField", "Colocarla en tu Campo"), new("AddToHand", "Añadirla a tu mano"), new("SpecialSummon", "Invocarla de Modo Especial"), new("SendToGraveyard", "Mandarla al Cementerio") };
+    private static readonly ParamOption[] OtherwiseOptions = { new("Choose", "Arriba o abajo del Deck (eliges)"), new("Top", "Arriba del Deck"), new("Bottom", "Abajo del Deck"), new("Graveyard", "Al Cementerio") };
+    private static readonly ParamOption[] MaterialMoveOptions = { new("Banish", "Desterrarlos"), new("Graveyard", "Mandarlos al Cementerio") };
+    private static readonly ParamOption[] SummonMethodOptions = { new("Normal", "Normal"), new("Set", "Colocada"), new("Flip", "Por Volteo"), new("Special", "Especial (por efecto)"), new("Fusion", "Por Fusión"), new("Ritual", "Por Ritual") };
+    private static readonly ParamOption[] RespondWhoOptions = { new("Opponent", "Tu adversario"), new("Controller", "Tú"), new("Both", "Cualquiera") };
     private static readonly ParamOption[] PhaseOptions = { new("Main1", "Main Phase 1"), new("Battle", "Battle Phase"), new("Main2", "Main Phase 2"), new("End", "End Phase") };
 
     private static ParamInfo P(string key, string label, ParamType type, string def = "", IReadOnlyList<ParamOption>? options = null, string help = "") =>
@@ -123,6 +148,8 @@ public static class MonsterEffectCatalog
         P("Type", "Tipo de monstruo", ParamType.MonsterType, "", help: "Vacío = cualquiera (ej. Demonio)."),
         P("Attribute", "Atributo", ParamType.Attribute, ""),
         P("CardId", "Carta específica", ParamType.Card, "0", help: "Una carta concreta por nombre (ej. \"Las Puertas del Mundo Oscuro\")."),
+        P("NameContains", "Nombre contiene (arquetipo)", ParamType.Text, "", help: "Para cartas de un arquetipo: \"Mundo Oscuro\" busca todas las cartas cuyo nombre lo contenga. Vacío = cualquiera."),
+        P("SubType", "Subtipo (Mágica/Trampa)", ParamType.Choice, "Any", SubTypeOptions, "Ej. \"Trampa Normal\": Clase = Trampa y Subtipo = Normal."),
         P("SameNameAsSource", "Solo cartas con el nombre de esta", ParamType.Bool, "false"),
         P("ExcludeSourceName", "Excepto cartas con el nombre de esta", ParamType.Bool, "false", help: "\"... excepto 'Nombre de esta carta'\"."),
         P("ExcludeSource", "Excepto esta misma carta", ParamType.Bool, "false"),
@@ -133,7 +160,11 @@ public static class MonsterEffectCatalog
     private static IReadOnlyList<ParamInfo> QueryParams(string defaultFrom, string defaultSide, string defaultKind = "Any", bool targets = true, string defaultChooser = "Controller")
     {
         var list = new List<ParamInfo>();
-        if (targets) list.Add(P("UseTargets", "Usar los objetivos seleccionados", ParamType.Bool, "false", help: "Actúa sobre las cartas elegidas al activar (\"selecciona ...; destrúyelo\"). Ignora el resto de la búsqueda."));
+        if (targets)
+        {
+            list.Add(P("UseTargets", "Usar los objetivos seleccionados", ParamType.Bool, "false", help: "Actúa sobre las cartas elegidas al activar (\"selecciona ...; destrúyelo\"). Ignora el resto de la búsqueda."));
+            list.Add(P("UseLastAffected", "Usar las cartas del paso anterior", ParamType.Bool, "false", help: "Actúa sobre las cartas que movió o miró el paso anterior (ej. \"mira 1 carta al azar ...; si es un monstruo, Invócalo\"). El filtro de abajo sigue aplicándose (Clase = Monstruo)."));
+        }
         list.Add(P("From", "Desde", ParamType.Zones, defaultFrom, ZoneOptions));
         list.Add(P("Side", "De quién", ParamType.Choice, defaultSide, SideOptions));
         list.AddRange(FilterParams(defaultKind));
@@ -152,17 +183,24 @@ public static class MonsterEffectCatalog
     /// <summary>Parametros del objetivo de un efecto ("selecciona ..." al activar).</summary>
     public static readonly IReadOnlyList<ParamInfo> TargetParams = QueryParams("MonsterZone", "Both", targets: false);
 
+    /// <summary>Filtro de la carta que sufre el evento de un Disparado sobre "otra carta" (de quien es, clase, Tipo, nombre...).</summary>
+    public static readonly IReadOnlyList<ParamInfo> EventFilterParams =
+        new[] { P("Side", "De quién es la carta", ParamType.Choice, "Own", SideOptions) }.Concat(FilterParams("Monster")).ToList();
+
     // ------------------------------------------------------------------ Pasos
 
     public static readonly IReadOnlyList<StepInfo> Steps = new StepInfo[]
     {
         new("draw", "Robar cartas", "\"Roba N carta(s)\" o \"ambos jugadores roban N carta(s)\".", StepUsage.Action,
-            new[] { P("Who", "Quién roba", ParamType.Choice, "Controller", WhoOptions), P("Count", "Cantidad", ParamType.Int, "1") },
+            new[] { P("Who", "Quién roba", ParamType.Choice, "Controller", WhoOptions), P("Count", "Cantidad", ParamType.Int, "1"),
+                    P("SameAsLastPerPlayer", "Tantas como descartó cada uno (paso anterior)", ParamType.Bool, "false", help: "\"... y después cada jugador roba el mismo número de cartas que descartó\". Ignora la Cantidad.") },
             () => new DrawStep()),
 
-        new("discard", "Descartar cartas de la mano", "\"Descarta N carta(s)\", \"tu adversario descarta 1 carta\", \"ambos jugadores descartan 1 carta\", o \"tu adversario elige al azar 1 carta de tu mano y la descartas\" (Quién elige = Al azar).",
+        new("discard", "Descartar cartas de la mano", "\"Descarta N carta(s)\", \"tu adversario descarta 1 carta\", \"cada jugador descarta 1 carta\" (Quién = Ambos; se salta a quien no tenga cartas), \"tu adversario elige al azar 1 carta de tu mano y la descartas\" (Quién elige = Al azar), \"cada uno elige 1 carta de la mano de su adversario\" (Quién elige = El adversario del dueño).",
             StepUsage.Action | StepUsage.Cost,
             new[] { P("Who", "Quién descarta", ParamType.Choice, "Controller", WhoOptions), P("Count", "Cantidad", ParamType.Int, "1"),
+                    P("AnyNumber", "Cualquier número (1 o más)", ParamType.Bool, "false", help: "\"Descarta cualquier número de cartas\": se elige al menos 1. Combínalo con \"× cada carta afectada\" en un paso de ATK."),
+                    P("All", "Toda la mano (tantas como sea posible)", ParamType.Bool, "false", help: "\"Descartan tantas cartas como sea posible de sus manos\"."),
                     P("Chooser", "Quién elige la carta", ParamType.Choice, "Owner", ChooserOptions) }
                 .Concat(FilterParams()).ToList(),
             () => new DiscardStep()),
@@ -175,6 +213,15 @@ public static class MonsterEffectCatalog
 
         new("pay_lp", "Pagar LP", "Costo \"paga N LP\".", StepUsage.Cost,
             new[] { P("Amount", "LP a pagar", ParamType.Int, "500") }, () => new PayLifeStep()),
+
+        new("banish_self", "Desterrar esta carta", "\"Puedes desterrar esta carta de tu Cementerio; ...\" (costo) o \"destierra esta carta\" (acción). Funciona desde el Cementerio, la mano o el Campo.", StepUsage.Cost | StepUsage.Action,
+            Array.Empty<ParamInfo>(), () => new BanishSelfStep()),
+
+        new("add_self_to_hand", "Añadir esta carta a la mano", "\"Puedes añadir esta carta a tu mano\" (desde el Cementerio, desterrada o el Campo).", StepUsage.Action | StepUsage.Cost,
+            Array.Empty<ParamInfo>(), () => new AddSelfToHandStep()),
+
+        new("tribute", "Sacrificar monstruo(s)", "Costo \"Sacrifica 1 monstruo\": manda monstruos que controlas al Cementerio (puede incluir a esta carta).", StepUsage.Cost | StepUsage.Action,
+            QueryParams("MonsterZone", "Own", "Monster", targets: false), () => new TributeStep()),
 
         new("special_summon_self", "Invocar esta carta de Modo Especial", "\"Invoca esta carta de Modo Especial\" desde donde esté (mano, Cementerio, desterrada).", StepUsage.Action,
             SummonDestinationParams(), () => new SpecialSummonSelfStep()),
@@ -202,13 +249,44 @@ public static class MonsterEffectCatalog
         new("send_to_graveyard", "Mandar al Cementerio", "\"Manda al Cementerio N carta(s) de tu Deck/mano/Campo\". También sirve como costo (ej. sacrificar).", StepUsage.Action | StepUsage.Cost,
             QueryParams("Deck", "Own"), () => new SendToGraveyardStep()),
 
+        new("set_spell_trap", "Colocar Mágica/Trampa en tu Campo", "\"Elige 1 Trampa de tu mano o Deck y Colócala en tu Campo\". Queda boca abajo; como cualquier carta Colocada, una Trampa no se puede activar el mismo turno.", StepUsage.Action,
+            QueryParams("Hand,Deck", "Own", "Trap"), () => new SetSpellTrapStep()),
+
+        new("reveal_hand", "Mostrar la mano", "\"Ambos jugadores muestran sus manos\" / \"tu adversario muestra su mano\". Si es la mano rival, se te enseña.", StepUsage.Action,
+            new[] { P("Who", "Quién la muestra", ParamType.Choice, "Both", WhoOptions) }, () => new RevealHandStep()),
+
+        new("reveal_random_hand", "Mirar cartas al azar de una mano", "\"Mira 1 carta al azar en la mano de tu adversario\". La(s) carta(s) vista(s) quedan como \"las cartas del paso anterior\" para el paso siguiente (ej. \"si es un monstruo, puedes Invocarlo\").", StepUsage.Action,
+            new[] { P("Who", "De la mano de", ParamType.Choice, "Opponent", WhoOptions), P("Count", "Cantidad", ParamType.Int, "1") }, () => new RevealRandomHandStep()),
+
+        new("excavate", "Excavar la carta superior del Deck", "\"Excava la carta superior de tu Deck y, si es una Trampa Normal, Colócala; si no, ponla arriba o abajo de tu Deck\". El filtro de abajo dice qué tiene que ser.", StepUsage.Action,
+            new[] { P("IfMatch", "Si cumple el filtro", ParamType.Choice, "SetOnField", ExcavateOptions), P("Otherwise", "Si no cumple", ParamType.Choice, "Choose", OtherwiseOptions) }
+                .Concat(FilterParams("Trap")).ToList(),
+            () => new ExcavateStep()),
+
+        new("fusion_summon", "Invocar por Fusión (por efecto)", "\"Invoca por Fusión 1 Monstruo de Fusión ..., desterrando de tu Campo o Cementerio los materiales\". El filtro de abajo es para el Monstruo de Fusión (ej. Tipo Demonio). Los materiales salen de las recetas de Fusión.", StepUsage.Action,
+            new[]
+            {
+                P("From", "Materiales desde", ParamType.Zones, "MonsterZone,Graveyard", ZoneOptions),
+                P("MaterialMove", "Los materiales se", ParamType.Choice, "Banish", MaterialMoveOptions),
+                P("HandIfNameContains", "También desde la mano (descartando) si el resultado se llama", ParamType.Text, "", help: "\"Si Invocas por Fusión un monstruo 'Mundo Oscuro' de esta forma, también puedes descartar monstruos como material\" → Mundo Oscuro."),
+                P("Position", "Posición", ParamType.Choice, "Attack", PositionOptions),
+            }.Concat(FilterParams("Monster").Where(f => f.Key is not ("SameNameAsSource" or "ExcludeSource" or "Face" or "SubType"))).ToList(),
+            () => new FusionSummonStep()),
+
+        new("summon_lock", "No puedes Invocar el resto del turno", "\"No puedes Invocar monstruos en el turno en que activas esta carta, excepto por este efecto (pero puedes Colocar)\": ponlo DESPUÉS de la Invocación del efecto. Para que no se pueda activar si ya Invocaste, agrega la condición \"Ya Invocaste un monstruo este turno\" con Negar.", StepUsage.Action,
+            Array.Empty<ParamInfo>(), () => new SummonLockStep()),
+
+        new("replace_responded_effect", "Cambiar el efecto activado por \"descarta\"", "Para efectos Rápidos de respuesta: \"el efecto activado se convierte en 'Tu adversario descarta 1 carta'\". Se aplica al eslabón al que responde (quien lo activó hace que SU adversario descarte).", StepUsage.Action,
+            new[] { P("Count", "Cartas a descartar", ParamType.Int, "1") }, () => new ReplaceRespondedEffectStep()),
+
         new("deck_bottom", "Poner cartas de la mano bajo el Deck", "\"Tu adversario pone en la parte inferior de su Deck exactamente N cartas de su mano, en cualquier orden\".", StepUsage.Action,
             new[] { P("Who", "Quién", ParamType.Choice, "Opponent", WhoOptions), P("Count", "Cantidad", ParamType.Int, "2"),
                     P("Chooser", "Quién elige", ParamType.Choice, "Owner", ChooserOptions) },
             () => new DeckBottomStep()),
 
-        new("modify_stats", "Ganar / perder ATK y DEF", "\"Esta carta gana 500 ATK\", \"ese objetivo gana 500 ATK\", \"todos los monstruos ... pierden 300 DEF\".", StepUsage.Action,
+        new("modify_stats", "Ganar / perder ATK, DEF o Nivel", "\"Esta carta gana 500 ATK\", \"ese objetivo gana 500 ATK\", \"todos los monstruos ... pierden 300 DEF\", \"gana 1 Nivel y 400 ATK por cada carta descartada\" (Multiplicar = × cada carta afectada), \"ganan ATK igual al Nivel del monstruo descartado × 100\" (ATK 100, Multiplicar = × el Nivel).", StepUsage.Action,
             new[] { P("Apply", "A quién", ParamType.Choice, "Self", ApplyOptions), P("Attack", "ATK (+/-)", ParamType.Int, "0"), P("Defense", "DEF (+/-)", ParamType.Int, "0"),
+                    P("Level", "Nivel (+/-)", ParamType.Int, "0"), P("Scale", "Multiplicar", ParamType.Choice, "None", ScaleOptions),
                     P("Duration", "Duración", ParamType.Choice, "Permanent", DurationOptions), P("Side", "De quién (Elegir/Todos)", ParamType.Choice, "Own", SideOptions) }
                 .Concat(FilterParams("Monster")).Append(P("Count", "Cantidad (Elegir)", ParamType.Int, "1")).ToList(),
             () => new ModifyStatsStep()),
@@ -223,20 +301,25 @@ public static class MonsterEffectCatalog
             Array.Empty<ParamInfo>(), () => new NegateActivationStep()),
 
         // Pasivos (efectos Continuos)
-        new("stat_modifier", "Modificar ATK/DEF (pasivo)", "Continuo: \"Esta carta gana N ATK\" o \"Todos los monstruos Demonio que controlas ganan N ATK\" mientras esta carta esté boca arriba.", StepUsage.Continuous,
-            new[] { P("Apply", "A quién", ParamType.Choice, "Self", new[] { ApplyOptions[0], ApplyOptions[3] }), P("Attack", "ATK (+/-)", ParamType.Int, "0"),
-                    P("Defense", "DEF (+/-)", ParamType.Int, "0"), P("Side", "De quién (Todos)", ParamType.Choice, "Own", SideOptions) }
-                .Concat(FilterParams("Monster")).ToList(),
+        new("stat_modifier", "Modificar ATK/DEF (pasivo)", "Continuo: \"Esta carta gana N ATK\", \"Todos los monstruos Demonio ganan 300 ATK/DEF\" (Mágica de Campo: De quién = De cualquier jugador) o \"El monstruo equipado gana 500 ATK\" (Mágica de Equipo), mientras esta carta esté boca arriba.", StepUsage.Continuous,
+            PassiveParams().Concat(new[] { P("Attack", "ATK (+/-)", ParamType.Int, "0"), P("Defense", "DEF (+/-)", ParamType.Int, "0") }).Concat(FilterParams("Monster")).ToList(),
             () => new PassiveStep()),
 
-        new("battle_indestructible", "No puede ser destruida en batalla", "Continuo: esta carta no puede ser destruida en batalla.", StepUsage.Continuous,
-            Array.Empty<ParamInfo>(), () => new PassiveStep()),
+        new("battle_indestructible", "No puede ser destruido en batalla", "Continuo: esta carta (o el monstruo equipado, o los que cumplan el filtro) no puede ser destruido en batalla.", StepUsage.Continuous,
+            PassiveParams().Concat(FilterParams("Monster")).ToList(), () => new PassiveStep()),
 
-        new("direct_attack", "Puede atacar directamente", "Continuo: esta carta puede atacar directamente a tu adversario aunque controle monstruos.", StepUsage.Continuous,
-            Array.Empty<ParamInfo>(), () => new PassiveStep()),
+        new("direct_attack", "Puede atacar directamente", "Continuo: esta carta (o el monstruo equipado, o los que cumplan el filtro) puede atacar directamente aunque el adversario controle monstruos.", StepUsage.Continuous,
+            PassiveParams().Concat(FilterParams("Monster")).ToList(), () => new PassiveStep()),
     };
 
     public static StepInfo? Step(string kind) => Steps.FirstOrDefault(s => s.Kind == kind);
+
+    /// <summary>A quien afecta un pasivo: esta carta, el monstruo equipado o todos los que cumplan el filtro (de quien).</summary>
+    private static IEnumerable<ParamInfo> PassiveParams() => new[]
+    {
+        P("Apply", "A quién", ParamType.Choice, "Self", PassiveApplyOptions),
+        P("Side", "De quién (Todos)", ParamType.Choice, "Own", SideOptions),
+    };
 
     // ------------------------------------------------------------------ Condiciones
 
@@ -272,7 +355,71 @@ public static class MonsterEffectCatalog
         new("lp_at_most", "Tus LP son N o menos", "",
             new[] { P("Amount", "LP", ParamType.Int, "4000") },
             (ctx, p) => ctx.Controller.LifePoints <= p.GetInt("Amount")),
+
+        new("event_caused_by", "El evento fue causado por una carta (del adversario y/o de un arquetipo)",
+            "Para Disparados: \"... por efecto de una carta 'Mundo Oscuro' o por efecto de una carta del adversario\", \"si deja el Campo a causa de una carta del adversario\". Se cumple si se cumple CUALQUIERA de las dos casillas marcadas (sin marcar nada: cualquier carta).",
+            new[]
+            {
+                P("ByOpponent", "Por una carta del adversario", ParamType.Bool, "false"),
+                P("SourceNameContains", "O por una carta cuyo nombre contenga", ParamType.Text, "", help: "Ej. Mundo Oscuro."),
+            },
+            (ctx, p) => EventCausedBy(ctx, p)),
+
+        new("event_summoned_by", "Había sido Invocada de cierta forma", "Para \"si esta carta Invocada por Fusión deja el Campo ...\".",
+            new[] { P("Method", "Invocada", ParamType.Choice, "Fusion", SummonMethodOptions) },
+            (ctx, p) => ctx.Activation.Trigger?.SummonedBy is { } method && method == p.GetEnum("Method", SummonMethod.Fusion)),
+
+        new("event_controlled_by_owner", "La controlaba su dueño", "Para \"si esta carta controlada por su dueño deja el Campo ...\".",
+            Array.Empty<ParamInfo>(), (ctx, _) => ctx.Activation.Trigger?.ControlledByOwner ?? true),
+
+        new("responding_to_activation", "En respuesta a la activación de ...",
+            "Para efectos Rápidos: \"Cuando tu adversario activa el efecto de un monstruo, o una Carta Mágica/de Trampa Normal\". Solo se puede activar respondiendo en una Cadena a algo de lo marcado.",
+            new[]
+            {
+                P("Who", "Activado por", ParamType.Choice, "Opponent", RespondWhoOptions),
+                P("MonsterEffect", "Efecto de un monstruo", ParamType.Bool, "true"),
+                P("NormalSpell", "Mágica Normal", ParamType.Bool, "true"),
+                P("NormalTrap", "Trampa Normal", ParamType.Bool, "true"),
+                P("OtherSpellTrap", "Otra Mágica/Trampa", ParamType.Bool, "false"),
+            },
+            (ctx, p) => RespondingTo(ctx, p)),
+
+        new("not_sent_to_graveyard_this_turn", "Esta carta NO fue mandada al Cementerio este turno", "\"... excepto en el turno en el que esta carta fue mandada al Cementerio\".",
+            Array.Empty<ParamInfo>(), (ctx, _) => !ctx.State.SentToGraveyardThisTurn.Contains(ctx.Source)),
+
+        new("summoned_this_turn", "Ya Invocaste un monstruo este turno", "Con Negar: \"no puedes activar esta carta si ya Invocaste este turno\" (Colocar no cuenta).",
+            Array.Empty<ParamInfo>(), (ctx, _) => ctx.Controller.HasSummonedThisTurn),
     };
+
+    private static bool EventCausedBy(MonsterEffectContext ctx, EffectActionParams p)
+    {
+        if (ctx.Activation.Trigger is not { } t || t.Cause.Kind is not (CauseKind.Effect or CauseKind.Battle)) return false;
+        bool byOpponent = p.GetBool("ByOpponent");
+        string name = p.GetString("SourceNameContains").Trim();
+        if (!byOpponent && name.Length == 0) return true;
+        if (byOpponent && t.Cause.By is { } by && by != ctx.ControllerSide) return true;
+        return name.Length > 0 && t.Cause.Source != null && t.Cause.Source.Name.IndexOf(name, StringComparison.CurrentCultureIgnoreCase) >= 0;
+    }
+
+    private static bool RespondingTo(MonsterEffectContext ctx, EffectActionParams p)
+    {
+        if (ctx.Activation.RespondingTo is not { } link) return false;
+        bool whoOk = p.GetString("Who", "Opponent") switch
+        {
+            "Controller" => link.Controller == ctx.ControllerSide,
+            "Both" => true,
+            _ => link.Controller != ctx.ControllerSide
+        };
+        if (!whoOk) return false;
+        if (link.IsMonsterEffect) return p.GetBool("MonsterEffect", true);
+        return link.Card switch
+        {
+            SpellCard { SubType: SpellSubType.Normal } => p.GetBool("NormalSpell", true),
+            TrapCard { SubType: TrapSubType.Normal } => p.GetBool("NormalTrap", true),
+            SpellCard or TrapCard => p.GetBool("OtherSpellTrap"),
+            _ => false
+        };
+    }
 
     public static ConditionInfo? Condition(string kind) => Conditions.FirstOrDefault(c => c.Kind == kind);
 

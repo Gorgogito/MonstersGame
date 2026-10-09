@@ -108,4 +108,54 @@ public class MonsterEffectPersistenceTests
         Assert.Contains(errors, e => e.Contains("efecto Continuo"));
         Assert.Contains(errors, e => e.Contains("no selecciona objetivos"));
     }
+
+    private static CardDto SpellCardDto(params MonsterEffectDto[] effects)
+    {
+        var dto = new CardDto { Id = 301, Kind = "Spell", Name = "Archivos de Prueba", SubType = "Continuous" };
+        dto.MonsterEffects.AddRange(effects);
+        return dto;
+    }
+
+    private static MonsterEffectDto WatchFiendDiscards() => new()
+    {
+        Type = "Trigger", TriggerEvent = "DiscardedByCardEffect", Subject = "AnyCard", Optional = true, OncePerTurn = true,
+        EventFilter = { ["Side"] = "Own", ["CardKind"] = "Monster", ["Type"] = "Demonio" },
+        ActivationConditions = { new EffectConditionDto { Kind = "event_caused_by", Params = { ["ByOpponent"] = "true", ["SourceNameContains"] = "Mundo Oscuro" } } },
+        Steps = { new MonsterEffectStepDto { ActionKind = "draw", Params = { ["Count"] = "2" } } }
+    };
+
+    [Fact]
+    public void SpellEffects_RoundTrip_AndBuildCoreSpellEffects()
+    {
+        using var dir = new TempCardDirectory();
+        var writer = new SqliteCardWriter(dir.DbPath);
+        var activation = new MonsterEffectDto { Type = "Activation", OncePerTurn = true, Steps = { new MonsterEffectStepDto { ActionKind = "draw" } } };
+
+        writer.SaveCard(SpellCardDto(activation, WatchFiendDiscards()));
+        var reloaded = writer.LoadAllDtos().Single(c => c.Id == 301);
+        Assert.Equal(2, reloaded.MonsterEffects.Count);
+        Assert.Equal("AnyCard", reloaded.MonsterEffects[1].Subject);
+        Assert.Equal("Demonio", reloaded.MonsterEffects[1].EventFilter["Type"]);
+
+        var spell = (SpellCard)new SqliteCardLoader(dir.DbPath).LoadCards().Single(c => c.Id == 301);
+        Assert.Equal(MonsterEffectType.Activation, spell.ActivationEffect!.Type);
+        Assert.Equal(EventSubject.AnyCard, spell.Effects[1].Subject);
+        Assert.Equal("Demonio", spell.Effects[1].EventFilter!.GetString("Type"));
+    }
+
+    [Fact]
+    public void Validator_SpellEffects_OnlyOneActivation_AndNoMonsterOnlyTypes()
+    {
+        var activation = new MonsterEffectDto { Type = "Activation", Steps = { new MonsterEffectStepDto { ActionKind = "draw" } } };
+        var flip = new MonsterEffectDto { Type = "Flip", TriggerEvent = "Flipped", Steps = { new MonsterEffectStepDto { ActionKind = "draw" } } };
+
+        Assert.Empty(CardDtoValidator.Validate(SpellCardDto(activation, WatchFiendDiscards()), Array.Empty<CardDto>(), null));
+
+        var errors = CardDtoValidator.Validate(SpellCardDto(activation, activation, flip), Array.Empty<CardDto>(), null);
+        Assert.Contains(errors, e => e.Contains("solo puede tener un efecto"));
+        Assert.Contains(errors, e => e.Contains("no puede tener un efecto"));
+
+        var monsterWithActivation = Card(activation);
+        Assert.Contains(CardDtoValidator.Validate(monsterWithActivation, Array.Empty<CardDto>(), null), e => e.Contains("no puede tener un efecto"));
+    }
 }

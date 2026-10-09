@@ -23,7 +23,9 @@ public static class MonsterEffectMapper
         dto.Text,
         dto.ActivationConditions.Select(ToCondition).ToList(),
         dto.HasTarget ? Params(dto.TargetParams) : null,
-        dto.Costs.Select(ToStep).ToList());
+        dto.Costs.Select(ToStep).ToList(),
+        CardDtoMapper.ParseEnum(dto.Subject, EventSubject.ThisCard),
+        dto.EventFilter.Count > 0 ? Params(dto.EventFilter) : null);
 
     private static EffectStep ToStep(MonsterEffectStepDto dto) =>
         new(dto.ActionKind, Params(dto.Params), dto.Optional, dto.Conditions.Select(ToCondition).ToList());
@@ -42,7 +44,13 @@ public static class MonsterEffectMapper
         var parts = new List<string> { $"[{MonsterEffectCatalog.TypeLabel(type)}]" };
 
         if (type == MonsterEffectType.Trigger)
-            parts.Add($"Si {LowerFirst(MonsterEffectCatalog.EventLabel(CardDtoMapper.ParseEnum(dto.TriggerEvent, EffectEvent.None)))}{(dto.Optional ? " (opcional)" : "")}:");
+        {
+            string evt = LowerFirst(MonsterEffectCatalog.EventLabel(CardDtoMapper.ParseEnum(dto.TriggerEvent, EffectEvent.None)));
+            string who = CardDtoMapper.ParseEnum(dto.Subject, EventSubject.ThisCard) == EventSubject.AnyCard
+                ? QuerySummary(WithCount(dto.EventFilter, "un(a)"), cardName)
+                : "esta carta";
+            parts.Add($"Si {who} {evt}{(dto.Optional ? " (opcional)" : "")}:");
+        }
         else if (type is MonsterEffectType.Ignition or MonsterEffectType.Quick or MonsterEffectType.Unclassified)
             parts.Add($"Desde {LowerFirst(MonsterEffectCatalog.ZoneLabel(CardDtoMapper.ParseEnum(dto.ActivationZone, EffectZone.Field)))}:");
 
@@ -60,9 +68,16 @@ public static class MonsterEffectMapper
         var info = MonsterEffectCatalog.Step(step.ActionKind);
         string label = info?.Label ?? step.ActionKind;
         var details = new List<string>();
-        if (step.Params.TryGetValue("UseTargets", out var useTargets) && useTargets == "true") details.Add("los objetivos");
+        if (step.ActionKind == "fusion_summon")
+        {
+            details.Add("1 " + QuerySummary(WithCount(step.Params, ""), cardName).Trim().Replace("carta", "Monstruo de Fusión"));
+            var zones = string.Join("/", CardQuery.ParseZones(step.Params.GetValueOrDefault("From", "MonsterZone,Graveyard")).Select(CardRef.ZoneName));
+            details.Add($"materiales de {zones}");
+        }
+        else if (step.Params.TryGetValue("UseTargets", out var useTargets) && useTargets == "true") details.Add("los objetivos");
+        else if (step.Params.TryGetValue("UseLastAffected", out var useLast) && useLast == "true") details.Add("las cartas del paso anterior");
         else if (info != null && info.Params.Any(p => p.Key == "From") && step.Params.Count > 0) details.Add(QuerySummary(step.Params, cardName));
-        foreach (var key in new[] { "Count", "Amount", "Attack", "Defense" })
+        foreach (var key in new[] { "Count", "Amount", "Attack", "Defense", "Level" })
             if (step.Params.TryGetValue(key, out var value) && value != "0" && value != "" && !(key == "Count" && details.Count > 0))
                 details.Add($"{KeyLabel(key)} {value}");
 
@@ -72,6 +87,9 @@ public static class MonsterEffectMapper
         return $"{conditions}{optional}{LowerFirst(label)}{(details.Count > 0 ? " (" + string.Join(", ", details) + ")" : "")}";
     }
 
+    private static Dictionary<string, string> WithCount(Dictionary<string, string> values, string count) =>
+        new(values.Where(v => v.Key is not ("Count" or "From"))) { ["Count"] = count };
+
     private static string LowerFirst(string text) => text.Length == 0 ? text : char.ToLowerInvariant(text[0]) + text[1..];
 
     private static string KeyLabel(string key) => key switch
@@ -80,6 +98,7 @@ public static class MonsterEffectMapper
         "Amount" => "",
         "Attack" => "ATK",
         "Defense" => "DEF",
+        "Level" => "Nivel",
         _ => key
     };
 
@@ -96,6 +115,12 @@ public static class MonsterEffectMapper
         if (int.TryParse(Get("LevelMin", "0"), out int min) && min > 0) words.Add($"Nivel ≥{min}");
         if (int.TryParse(Get("LevelMax", "0"), out int max) && max > 0) words.Add($"Nivel ≤{max}");
         if (int.TryParse(Get("CardId", "0"), out int id) && id > 0) words.Add($"\"{cardName?.Invoke(id) ?? "#" + id}\"");
+        if (Get("NameContains") is { Length: > 0 } archetype) words.Add($"\"{archetype}\"");
+        if (Get("SubType", "Any") is var subType && subType != "Any") words.Add(subType switch
+        {
+            "Continuous" => "Continua", "Equip" => "de Equipo", "Field" => "de Campo", "QuickPlay" => "de Juego Rápido",
+            "Counter" => "de Contraefecto", _ => subType
+        });
         if (Get("SameNameAsSource") == "true") words.Add("con el nombre de esta carta");
         if (Get("ExcludeSourceName") == "true") words.Add("excepto el nombre de esta carta");
         if (Get("Face") == "FaceUp") words.Add("boca arriba");

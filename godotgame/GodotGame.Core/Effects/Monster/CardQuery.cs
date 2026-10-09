@@ -25,8 +25,14 @@ public enum ChooserKind
     Owner,
 
     /// <summary>Al azar.</summary>
-    Random
+    Random,
+
+    /// <summary>El adversario del dueño de las cartas (ej. "cada jugador elige 1 carta de la mano de su adversario").</summary>
+    OwnersOpponent
 }
+
+/// <summary>Subtipo de Magia/Trampa buscado.</summary>
+public enum SubTypeFilter { Any, Normal, Continuous, Equip, Field, QuickPlay, Ritual, Counter }
 
 /// <summary>
 /// Busqueda de cartas parametrizada por datos (los mismos parametros que usan
@@ -46,6 +52,8 @@ public sealed class CardQuery
     public bool SameNameAsSource { get; }
     public bool ExcludeSourceName { get; }
     public bool ExcludeSource { get; }
+    public string NameContains { get; }
+    public SubTypeFilter SubType { get; }
     public FaceFilter Face { get; }
     public int Count { get; }
     public int Min { get; }
@@ -65,6 +73,8 @@ public sealed class CardQuery
         SameNameAsSource = p.GetBool("SameNameAsSource");
         ExcludeSourceName = p.GetBool("ExcludeSourceName");
         ExcludeSource = p.GetBool("ExcludeSource");
+        NameContains = p.GetString("NameContains").Trim().Trim('"', '\'', '“', '”');
+        SubType = p.GetEnum("SubType", SubTypeFilter.Any);
         Face = p.GetEnum("Face", FaceFilter.Any);
         Count = Math.Max(1, p.GetInt("Count", 1));
         Min = Math.Clamp(p.GetInt("Min", Count), 0, Count);
@@ -163,13 +173,16 @@ public sealed class CardQuery
         if (LevelMin > 0 || LevelMax > 0 || !string.IsNullOrWhiteSpace(Type) || Attribute != null)
         {
             if (card is not MonsterCard monster) return false;
-            if (LevelMin > 0 && monster.Level < LevelMin) return false;
-            if (LevelMax > 0 && monster.Level > LevelMax) return false;
+            int level = candidate.MonsterInstance(state)?.EffectiveLevel ?? monster.Level;
+            if (LevelMin > 0 && level < LevelMin) return false;
+            if (LevelMax > 0 && level > LevelMax) return false;
             if (!string.IsNullOrWhiteSpace(Type) && !string.Equals(monster.Type, Type, StringComparison.OrdinalIgnoreCase)) return false;
             if (Attribute != null && monster.Attribute != Attribute) return false;
         }
 
         if (CardId > 0 && card.Id != CardId) return false;
+        if (NameContains.Length > 0 && card.Name.IndexOf(NameContains, StringComparison.CurrentCultureIgnoreCase) < 0) return false;
+        if (SubType != SubTypeFilter.Any && !MatchesSubType(card, SubType)) return false;
         if (SameNameAsSource && !SameName(card, source)) return false;
         if (ExcludeSourceName && SameName(card, source)) return false;
 
@@ -181,6 +194,13 @@ public sealed class CardQuery
         }
         return true;
     }
+
+    private static bool MatchesSubType(Card card, SubTypeFilter subType) => card switch
+    {
+        SpellCard spell => subType.ToString() == spell.SubType.ToString(),
+        TrapCard trap => subType.ToString() == trap.SubType.ToString(),
+        _ => false
+    };
 
     public static bool SameName(Card a, Card b) => string.Equals(a.Name.Trim(), b.Name.Trim(), StringComparison.OrdinalIgnoreCase);
 }

@@ -97,3 +97,14 @@ public enum MonsterCategory
     Fusion,
     Ritual
 }
+
+/// <summary>Como entro un Monstruo al Campo (para efectos como "si esta carta Invocada por Fusion ...").</summary>
+public enum SummonMethod
+{
+    Normal,
+    Set,
+    Flip,
+    Special,
+    Fusion,
+    Ritual
+}
