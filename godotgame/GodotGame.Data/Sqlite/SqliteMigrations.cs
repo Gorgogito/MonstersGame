@@ -36,6 +36,7 @@ public static class SqliteMigrations
         new Migration008_AddFieldTypeOpposedModifier(),
         new Migration009_SeedElementalFieldTypes(),
         new Migration010_AddGuardianStars(),
+        new Migration011_AddMonsterEffects(),
     };
 
     public static void ApplyPending(SqliteConnection connection)

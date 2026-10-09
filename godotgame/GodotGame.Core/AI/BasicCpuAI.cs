@@ -1,4 +1,5 @@
 using GodotGame.Core.Battle;
+using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Entities;
 using GodotGame.Core.Services;
 
@@ -23,6 +24,10 @@ public sealed class BasicCpuAI : IDuelAI
 
     public BasicCpuAI(FusionService fusion) => _fusion = fusion;
 
+    /// <summary>Efectos ya intentados este turno (carta + indice), para no repetir en bucle un efecto sin "una vez por turno".</summary>
+    private readonly HashSet<string> _effectsTriedThisTurn = new();
+    private int _effectsTurn = -1;
+
     private static bool ChooseGuardianStars(DuelEngine engine, int selfIndex)
     {
         var me = engine.State.Players[selfIndex];
@@ -43,6 +48,16 @@ public sealed class BasicCpuAI : IDuelAI
         if (engine.IsOver) return false;
         var state = engine.State;
         var mySide = state.Players[selfIndex].Side;
+
+        if (_effectsTurn != state.TurnNumber)
+        {
+            _effectsTurn = state.TurnNumber;
+            _effectsTriedThisTurn.Clear();
+        }
+
+        // Una decision pendiente a mitad de un efecto bloquea todo lo demas.
+        if (state.PendingChoice is { } choice)
+            return choice.Chooser == mySide && AnswerChoice(engine, choice, mySide);
 
         // La Cadena puede pedirle Prioridad a la CPU aunque no sea su turno
         // (por ejemplo, si el humano activa una carta). Se comprueba primero,
@@ -81,8 +96,64 @@ public sealed class BasicCpuAI : IDuelAI
     /// que la IA sepa jugar Magias/Trampas: entonces bastara con que este
     /// metodo elija encadenar en vez de pasar cuando tenga algo legal.
     /// </summary>
-    private static bool RespondToChain(DuelEngine engine) =>
-        engine.PassPriority().Success;
+    private bool RespondToChain(DuelEngine engine)
+    {
+        // Un efecto Rapido propio solo para responder a algo del rival.
+        var state = engine.State;
+        var mySide = state.ChainPendingResponder!.Value;
+        if (state.Chain[^1].Controller != mySide && TryActivateEffect(engine, mySide, quickOnly: true))
+            return true;
+        return engine.PassPriority().Success;
+    }
+
+    /// <summary>Activa el primer efecto de Monstruo disponible que no haya intentado ya este turno.</summary>
+    private bool TryActivateEffect(DuelEngine engine, PlayerSide mySide, bool quickOnly)
+    {
+        foreach (var effect in engine.GetActivatableEffects(mySide))
+        {
+            if (quickOnly != (effect.Effect.Type == MonsterEffectType.Quick)) continue;
+            string key = $"{effect.Card.Card.Id}:{effect.EffectIndex}:{effect.Card.Zone}:{effect.Card.Index}";
+            if (!_effectsTriedThisTurn.Add(key)) continue;
+            if (engine.ActivateMonsterEffect(effect).Success) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Responde una decision a mitad de efecto con una heuristica simple:
+    /// siempre acepta lo opcional; al elegir cartas, se queda con las mas
+    /// fuertes si salen ganando (o si perjudican al rival) y entrega las mas
+    /// debiles si las pierde ella.
+    /// </summary>
+    private static bool AnswerChoice(DuelEngine engine, ChoiceRequest choice, PlayerSide mySide)
+    {
+        switch (choice.Kind)
+        {
+            case ChoiceKind.YesNo:
+                return engine.AnswerYesNo(true).Success;
+            case ChoiceKind.SelectOption:
+                return engine.AnswerOption(0).Success;
+        }
+
+        var ranked = choice.Candidates
+            .Select((card, index) => (card, index, value: CardValue(card.Card)))
+            .ToList();
+        bool losingOwnCards = choice.Purpose == ChoicePurpose.Harm && ranked.Count > 0 && ranked.All(c => c.card.Side == mySide);
+        int count = losingOwnCards ? choice.Min : choice.Max;
+
+        // Perjudicar: primero las del rival (la mas fuerte), despues las propias (la mas debil).
+        // Beneficiar: primero las propias (la mas fuerte), despues las del rival (la mas debil).
+        bool harm = choice.Purpose == ChoicePurpose.Harm;
+        var picked = ranked
+            .OrderBy(c => (c.card.Side == mySide) == harm ? 1 : 0)
+            .ThenBy(c => (c.card.Side == mySide) == harm ? c.value : -c.value)
+            .Take(count)
+            .Select(c => c.index)
+            .ToArray();
+        return engine.AnswerCards(picked).Success;
+    }
+
+    private static int CardValue(Card card) => card is MonsterCard m ? m.Attack + m.Defense / 2 : 1500;
 
     /// <summary>
     /// Elige que descartar por limite de mano: primero las cartas que no son
@@ -105,6 +176,9 @@ public sealed class BasicCpuAI : IDuelAI
         var state = engine.State;
         var me = state.ActivePlayer;
         var opp = state.InactivePlayer;
+
+        // Efectos de Encendido / No clasificados disponibles (buscar, Invocarse, etc.).
+        if (TryActivateEffect(engine, me.Side, quickOnly: false)) return true;
 
         if (!me.HasNormalSummonedThisTurn && me.FirstFreeMonsterZone() != -1)
         {

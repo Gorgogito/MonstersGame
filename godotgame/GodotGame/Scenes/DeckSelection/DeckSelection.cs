@@ -126,7 +126,8 @@ public partial class DeckSelection : Control
         GameData.Shuffle(human.Deck, _root.Random);
         GameData.Shuffle(cpu.Deck, _root.Random);
 
-        var engine = new DuelEngine(new DuelConfig(), _root.Data.Fusions);
+        // Pase automatico: si nadie puede responder a la Cadena, se resuelve sola.
+        var engine = new DuelEngine(new DuelConfig { AutoPassWhenNoResponse = true }, _root.Data.Fusions);
         var ai = new BasicCpuAI(_root.Data.Fusions);
 
         int firstPlayer = _root.Random.Next(2);

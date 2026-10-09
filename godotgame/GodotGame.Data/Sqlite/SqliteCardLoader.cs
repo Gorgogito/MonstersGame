@@ -20,6 +20,7 @@ public sealed class SqliteCardLoader : ICardLoader
         using var connection = SqliteSchema.OpenConnection(_dbPath);
         var requirementLoader = new SqliteRequirementLoader(connection);
         var fieldTypeLoader = new SqliteFieldTypeLoader(connection);
+        var monsterEffects = SqliteMonsterEffectStore.LoadAll(connection);
 
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -36,6 +37,7 @@ public sealed class SqliteCardLoader : ICardLoader
             var dto = SqliteCardMapping.ReadDto(reader);
             dto.GuardianStar1 = reader.GetString(22);
             dto.GuardianStar2 = reader.GetString(23);
+            dto.MonsterEffects = monsterEffects.GetValueOrDefault(dto.Id) ?? new List<MonsterEffectDto>();
             RequirementSet? ritualRequirement = reader.IsDBNull(15) ? null : requirementLoader.LoadRequirementSet(reader.GetInt32(15));
             TargetFilter? equipTargetFilter = reader.IsDBNull(16) ? null : requirementLoader.LoadFilter(reader.GetInt32(16));
             int equipAttackModifier = reader.GetInt32(17);

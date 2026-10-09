@@ -19,5 +19,8 @@ public enum ModifierDuration
     UntilEndOfTurn,
 
     /// <summary>Se elimina despues de que transcurran <see cref="ActiveStatModifier.RemainingTurns"/> Fases Finales del controlador que lo aplico.</summary>
-    ForNTurns
+    ForNTurns,
+
+    /// <summary>Dura mientras el Monstruo siga boca arriba en el Campo (ej. "ese objetivo gana 500 ATK").</summary>
+    Permanent
 }

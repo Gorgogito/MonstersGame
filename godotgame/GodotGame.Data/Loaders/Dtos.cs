@@ -69,6 +69,55 @@ public sealed class CardDto
     public List<EffectActionStepDto> EffectActionSteps { get; set; } = new();
     /// <summary>Clave de <c>VisualProfileCatalog</c> que esta carta elige para su efecto compuesto (activacion/volteo). Vacio = usa el perfil generico del tipo de evento.</summary>
     public string EffectVisualProfileKey { get; set; } = "";
+
+    /// <summary>
+    /// Solo para Kind = "Monster": efectos de Monstruo compuestos por datos
+    /// (Continuo, de Encendido, Disparado, Rapido, de Volteo, No clasificado).
+    /// Ver <c>GodotGame.Core.Effects.Monster.MonsterEffect</c>.
+    /// </summary>
+    public List<MonsterEffectDto> MonsterEffects { get; set; } = new();
+}
+
+/// <summary>Forma de archivo de <c>GodotGame.Core.Effects.Monster.MonsterEffect</c>.</summary>
+public sealed class MonsterEffectDto
+{
+    /// <summary>Nombre de <c>MonsterEffectType</c>: Continuous, Ignition, Trigger, Quick, Flip o Unclassified.</summary>
+    public string Type { get; set; } = "Ignition";
+    /// <summary>Solo Trigger: nombre de <c>EffectEvent</c>.</summary>
+    public string TriggerEvent { get; set; } = "None";
+    /// <summary>Solo Trigger: "puedes" (opcional) u obligatorio.</summary>
+    public bool Optional { get; set; }
+    /// <summary>Encendido/Rapido/No clasificado: nombre de <c>EffectZone</c> (Field, Hand, Graveyard, Banished).</summary>
+    public string ActivationZone { get; set; } = "Field";
+    public bool OncePerTurn { get; set; }
+    /// <summary>Texto del efecto tal como aparece en la carta (opcional).</summary>
+    public string Text { get; set; } = "";
+    public List<EffectConditionDto> ActivationConditions { get; set; } = new();
+    /// <summary>Si el efecto "selecciona" objetivos al activarse (parametros en <see cref="TargetParams"/>).</summary>
+    public bool HasTarget { get; set; }
+    public Dictionary<string, string> TargetParams { get; set; } = new();
+    public List<MonsterEffectStepDto> Costs { get; set; } = new();
+    public List<MonsterEffectStepDto> Steps { get; set; } = new();
+}
+
+/// <summary>Un paso (costo o accion) de un <see cref="MonsterEffectDto"/>.</summary>
+public sealed class MonsterEffectStepDto
+{
+    /// <summary>Clave de <c>MonsterEffectCatalog.Steps</c> (ej. "draw", "special_summon_self").</summary>
+    public string ActionKind { get; set; } = "";
+    public Dictionary<string, string> Params { get; set; } = new();
+    /// <summary>"Puedes ...": se pregunta al resolverse.</summary>
+    public bool Optional { get; set; }
+    /// <summary>"Y despues, si ...": todas deben cumplirse para ejecutar el paso.</summary>
+    public List<EffectConditionDto> Conditions { get; set; } = new();
+}
+
+/// <summary>Una condicion (clave de <c>MonsterEffectCatalog.Conditions</c>) con su negacion y parametros.</summary>
+public sealed class EffectConditionDto
+{
+    public string Kind { get; set; } = "";
+    public bool Negate { get; set; }
+    public Dictionary<string, string> Params { get; set; } = new();
 }
 
 /// <summary>Una condicion atomica editable de un <see cref="FilterDto"/> (forma de archivo de <c>GodotGame.Core.Requirements.FilterCondition</c>).</summary>

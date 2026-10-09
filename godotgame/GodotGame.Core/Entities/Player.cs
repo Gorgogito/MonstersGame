@@ -37,6 +37,9 @@ public sealed class Player
     /// <summary>Cementerio (cartas usadas o destruidas).</summary>
     public List<Card> Graveyard { get; } = new();
 
+    /// <summary>Cartas desterradas (fuera del juego, boca arriba).</summary>
+    public List<Card> Banished { get; } = new();
+
     /// <summary>Indica si ya realizo su Invocacion Normal / Colocacion este turno.</summary>
     public bool HasNormalSummonedThisTurn { get; set; }
 

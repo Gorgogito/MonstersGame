@@ -23,7 +23,7 @@ public sealed partial class MonsterPanel : VBoxContainer
     private readonly Button _typeEditorButton = new() { Text = "...", CustomMinimumSize = new Vector2(32, 0) };
     private readonly OptionButton _attributeCombo = new();
     private readonly OptionButton _categoryCombo = new();
-    private readonly OptionButton _effectCombo = new();
+    private readonly OptionButton _effectCombo = new() { FitToLongestItem = false, ClipText = true };
     private readonly OptionButton _star1Combo = new();
     private readonly OptionButton _star2Combo = new();
 
@@ -35,6 +35,8 @@ public sealed partial class MonsterPanel : VBoxContainer
     private readonly SpinBox _fusionSlotMax = new() { MinValue = 1, MaxValue = 9, Value = 1 };
     private List<FusionSlotDto> _currentFusionSlots = new();
 
+    private readonly MonsterEffectsEditor _effectsEditor;
+
     private bool _suppressEvents;
 
     public event Action? Changed;
@@ -42,9 +44,10 @@ public sealed partial class MonsterPanel : VBoxContainer
 
     public string SelectedEffectId => SelectedEffectOption();
 
-    public MonsterPanel(TypeRepository typeRepo)
+    public MonsterPanel(TypeRepository typeRepo, EffectEditorContext effectContext)
     {
         _typeRepo = typeRepo;
+        _effectsEditor = new MonsterEffectsEditor(effectContext);
         AddThemeConstantOverride("separation", 8);
 
         var layout = EditorLayout.TwoColumnLayout();
@@ -54,7 +57,7 @@ public sealed partial class MonsterPanel : VBoxContainer
         EditorLayout.AddRow(layout, "Tipo", BuildTypeRow());
         EditorLayout.AddRow(layout, "Atributo", _attributeCombo);
         EditorLayout.AddRow(layout, "Categoria", _categoryCombo);
-        EditorLayout.AddRow(layout, "Efecto (Volteo)", _effectCombo);
+        EditorLayout.AddRow(layout, "Efecto heredado (Volteo simple)", _effectCombo);
         EditorLayout.AddRow(layout, "Estrella Guardiana 1", _star1Combo);
         EditorLayout.AddRow(layout, "Estrella Guardiana 2", _star2Combo);
         AddChild(layout);
@@ -64,6 +67,10 @@ public sealed partial class MonsterPanel : VBoxContainer
         _fusionSectionRoot = section;
         AddChild(section);
         _fusionSectionRoot.Visible = false; // seccion completa oculta hasta Categoria = Fusion
+
+        var effectsSection = EditorLayout.Section("Efectos de Monstruo", out var effectsBody);
+        effectsBody.AddChild(_effectsEditor);
+        AddChild(effectsSection);
 
         foreach (string name in Enum.GetNames<MonsterAttribute>()) _attributeCombo.AddItem(name);
         foreach (string name in Enum.GetNames<MonsterCategory>()) _categoryCombo.AddItem(name);
@@ -125,6 +132,20 @@ public sealed partial class MonsterPanel : VBoxContainer
         _star1Combo.ItemSelected += _ => RaiseChanged();
         _star2Combo.ItemSelected += _ => RaiseChanged();
         _fusionSlotFilter.FilterChanged += RaiseChanged;
+        _effectsEditor.Changed += OnEffectsChanged;
+    }
+
+    /// <summary>Un Monstruo con efectos no puede ser Normal: al agregar el primero se pasa solo a Effect.</summary>
+    private void OnEffectsChanged()
+    {
+        if (_effectsEditor.Count > 0 && SelectedItemText(_categoryCombo, "Normal") == nameof(MonsterCategory.Normal))
+        {
+            _suppressEvents = true;
+            SelectComboText(_categoryCombo, nameof(MonsterCategory.Effect));
+            _suppressEvents = false;
+            UpdateVisibility();
+        }
+        RaiseChanged();
     }
 
     private void RaiseChanged()
@@ -231,6 +252,8 @@ public sealed partial class MonsterPanel : VBoxContainer
         SelectStar(_star1Combo, dto.GuardianStar1, defaults.First);
         SelectStar(_star2Combo, dto.GuardianStar2, defaults.Second);
 
+        _effectsEditor.LoadFrom(dto.MonsterEffects);
+
         _currentFusionSlots = dto.FusionMaterials.Select(CardDtoCloning.CloneSlot).ToList();
         RefreshFusionSlotsList();
         _fusionSlotFilter.SetFilter(null);
@@ -253,6 +276,7 @@ public sealed partial class MonsterPanel : VBoxContainer
         dto.Attribute = SelectedItemText(_attributeCombo, "Dark");
         dto.Category = SelectedItemText(_categoryCombo, "Normal");
         dto.FusionMaterials = _currentFusionSlots.Select(CardDtoCloning.CloneSlot).ToList();
+        dto.MonsterEffects = _effectsEditor.GetEffects();
         dto.EffectId = SelectedEffectId;
         dto.GuardianStar1 = SelectedStar(_star1Combo).ToString();
         dto.GuardianStar2 = SelectedStar(_star2Combo).ToString();

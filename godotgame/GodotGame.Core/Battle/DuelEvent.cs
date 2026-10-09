@@ -48,5 +48,14 @@ public sealed record RitualPerformedEvent(PlayerSide Side, int ZoneIndex, Monste
 /// <summary>La Carta de Campo de un jugador cambio (activacion nueva, reemplazando la anterior si habia).</summary>
 public sealed record FieldChangedEvent(PlayerSide Side, string? OldFieldTypeId, string? NewFieldTypeId) : DuelEvent(Side);
 
+/// <summary>Se activo el efecto de un Monstruo (desde el Campo, la mano, el Cementerio o el Destierro).</summary>
+public sealed record MonsterEffectActivatedEvent(PlayerSide Side, MonsterCard Card, GodotGame.Core.Effects.Monster.CardZone Zone, int ZoneIndex, GodotGame.Core.Effects.Monster.MonsterEffectType EffectType) : DuelEvent(Side);
+
+/// <summary>Una carta salio de la mano al Cementerio por un descarte.</summary>
+public sealed record CardDiscardedEvent(PlayerSide Side, Card Card) : DuelEvent(Side);
+
+/// <summary>Una carta fue desterrada.</summary>
+public sealed record CardBanishedEvent(PlayerSide Side, Card Card) : DuelEvent(Side);
+
 /// <summary>Se aplico un modificador de ATK/DEF a un Monstruo del Campo (hoy, solo al equiparse una Magia de Equipo).</summary>
 public sealed record StatModifierAppliedEvent(PlayerSide Side, int ZoneIndex, int AttackAmount, int DefenseAmount, string Source) : DuelEvent(Side);

@@ -13,7 +13,7 @@ namespace GodotGame.Editor.Controls;
 public sealed partial class TrapPanel : VBoxContainer
 {
     private readonly OptionButton _subTypeCombo = new();
-    private readonly OptionButton _effectCombo = new();
+    private readonly OptionButton _effectCombo = new() { FitToLongestItem = false, ClipText = true };
 
     private bool _suppressEvents;
 

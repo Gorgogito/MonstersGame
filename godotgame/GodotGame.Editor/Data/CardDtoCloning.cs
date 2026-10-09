@@ -52,6 +52,10 @@ internal static class CardDtoCloning
         EffectTargetKind = d.EffectTargetKind,
         EffectTargetFilter = CloneFilter(d.EffectTargetFilter),
         EffectActionSteps = d.EffectActionSteps.Select(CloneStep).ToList(),
-        EffectVisualProfileKey = d.EffectVisualProfileKey
+        EffectVisualProfileKey = d.EffectVisualProfileKey,
+        MonsterEffects = d.MonsterEffects.Select(CloneMonsterEffect).ToList()
     };
+
+    public static MonsterEffectDto CloneMonsterEffect(MonsterEffectDto e) =>
+        System.Text.Json.JsonSerializer.Deserialize<MonsterEffectDto>(System.Text.Json.JsonSerializer.Serialize(e))!;
 }

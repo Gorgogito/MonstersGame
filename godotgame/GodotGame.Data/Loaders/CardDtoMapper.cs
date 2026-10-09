@@ -61,7 +61,8 @@ public static class CardDtoMapper
                 image: dto.Image,
                 description: dto.Description,
                 guardianStar1: ParseOptionalStar(dto.GuardianStar1),
-                guardianStar2: ParseOptionalStar(dto.GuardianStar2))
+                guardianStar2: ParseOptionalStar(dto.GuardianStar2),
+                effects: MonsterEffectMapper.ToEffects(dto.MonsterEffects))
         };
     }
 

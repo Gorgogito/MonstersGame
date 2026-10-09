@@ -80,6 +80,25 @@ public sealed class DuelState
     /// </summary>
     public int ChainConsecutivePasses { get; set; }
 
+    /// <summary>
+    /// Decision pendiente de un jugador en medio de un efecto (ver
+    /// <see cref="GodotGame.Core.Effects.Monster.ChoiceRequest"/>). Mientras no
+    /// sea null el duelo esta en pausa esperando la respuesta.
+    /// </summary>
+    public GodotGame.Core.Effects.Monster.ChoiceRequest? PendingChoice { get; set; }
+
+    /// <summary>Eventos sobre cartas concretas que todavia no se revisaron en busca de efectos Disparados.</summary>
+    public List<GodotGame.Core.Effects.Monster.TriggerEvent> TriggerEvents { get; } = new();
+
+    /// <summary>Efectos "una vez por turno" ya usados este turno (por jugador + nombre de carta + indice de efecto).</summary>
+    public HashSet<string> UsedOncePerTurn { get; } = new();
+
+    /// <summary>Verdadero mientras la Cadena se esta resolviendo (nadie puede responder ni pasar).</summary>
+    public bool ChainResolving { get; set; }
+
+    /// <summary>Azar del duelo (elecciones "al azar" de los efectos). Reemplazable para pruebas deterministas.</summary>
+    public Random Rng { get; set; } = new();
+
     public DuelState(Player human, Player cpu)
     {
         Players = new[] { human, cpu };

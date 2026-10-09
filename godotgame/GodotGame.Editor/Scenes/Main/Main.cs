@@ -71,7 +71,7 @@ public partial class Main : Control
         _typeRepo = new TypeRepository(dbPath);
         _fieldTypeRepo = new FieldTypeRepository(dbPath);
 
-        _monsterPanel = new MonsterPanel(_typeRepo);
+        _monsterPanel = new MonsterPanel(_typeRepo, new EffectEditorContext { Types = () => _typeRepo.Types, Cards = () => _repository.Cards });
         _spellPanel = new SpellPanel(_fieldTypeRepo, _typeRepo);
         _trapPanel = new TrapPanel();
         _effectComposerPanel = new EffectComposerPanel(_typeRepo);

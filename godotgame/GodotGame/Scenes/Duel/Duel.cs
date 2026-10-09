@@ -2,6 +2,7 @@ using Godot;
 using GodotGame.Core.AI;
 using GodotGame.Core.Battle;
 using GodotGame.Core.Effects;
+using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Entities;
 using GodotGame.Game;
 using GodotGame.Graphics;
@@ -73,6 +74,13 @@ public partial class Duel : Control
     private Button _cpuFieldButton = null!, _playerFieldButton = null!;
 
     private Button _phaseButton = null!, _endTurnButton = null!, _chainPassButton = null!, _directAttackButton = null!, _cancelButton = null!;
+
+    /// <summary>"EFECTOS (n)": abre la lista de efectos de Monstruo que puedes activar ahora (de cualquier zona).</summary>
+    private Button _effectsButton = null!;
+
+    /// <summary>Ventana modal de decisiones de efectos (Si/No, opciones, elegir cartas) y del menu de efectos.</summary>
+    private EffectChoicePanel _choicePanel = null!;
+    private bool _effectsMenuOpen;
     private Button _ctx0 = null!, _ctx1 = null!;
     private Action? _ctx0Action, _ctx1Action, _cancelAction, _directAttackAction, _chainPassAction;
 
@@ -321,6 +329,7 @@ public partial class Duel : Control
         _ctx1 = NewActionButton(actionsRow, "", () => _ctx1Action?.Invoke());
         _directAttackButton = NewActionButton(actionsRow, "ATAQUE DIRECTO", () => _directAttackAction?.Invoke());
         _chainPassButton = NewActionButton(actionsRow, "PASAR / RESOLVER CADENA", () => _chainPassAction?.Invoke());
+        _effectsButton = NewActionButton(actionsRow, "EFECTOS", OpenEffectsMenu);
         _cancelButton = NewActionButton(actionsRow, "CANCELAR (ESC)", () => _cancelAction?.Invoke());
 
         // Overlay de flash de pantalla (victoria/derrota): un ColorRect a
@@ -335,6 +344,13 @@ public partial class Duel : Control
             AnchorBottom = 1f
         };
         AddChild(_screenFlash);
+
+        _choicePanel = new EffectChoicePanel();
+        _choicePanel.Setup(_textures, card =>
+        {
+            if (card != null) _detailPanel.ShowEntry(new CardDetailPanel.Entry(card, null, null, "Opcion a elegir"));
+        });
+        AddChild(_choicePanel);
     }
 
     /// <summary>Etiqueta "LP actual" superpuesta a una <see cref="ProgressBar"/> de vida: <c>ShowPercentage</c> solo sabe mostrar un porcentaje, nunca el valor real, asi que hace falta un Label propio encima.</summary>
@@ -623,9 +639,18 @@ public partial class Duel : Control
             return;
         }
 
-        bool cpuTurnOrChainTurn = _engine.State.Chain.Count > 0
-            ? _engine.State.ChainPendingResponder == PlayerSide.Cpu
-            : _engine.ActiveIndex == CpuIndex;
+        // Una decision de un efecto que te toca a ti: el duelo espera tu respuesta.
+        if (RefreshChoicePanel())
+        {
+            RefreshAll();
+            return;
+        }
+
+        bool cpuTurnOrChainTurn = _engine.State.PendingChoice is { } pendingChoice
+            ? pendingChoice.Chooser == PlayerSide.Cpu
+            : _engine.State.Chain.Count > 0
+                ? _engine.State.ChainPendingResponder == PlayerSide.Cpu
+                : _engine.ActiveIndex == CpuIndex;
 
         if (cpuTurnOrChainTurn)
         {
@@ -810,8 +835,8 @@ public partial class Duel : Control
 
         _cpuName.Text = cpu.Name;
         RefreshLpBar(_cpuLp, _cpuLpLabel, _cpuLpCounter, _cpuLpTrend);
-        _cpuCounts.Text = $"Mano {cpu.Hand.Count}  Mazo {cpu.Deck.Count}";
-        _playerName.Text = human.Name;
+        _cpuCounts.Text = $"Mano {cpu.Hand.Count}  Mazo {cpu.Deck.Count}  Cem {cpu.Graveyard.Count}  Dest {cpu.Banished.Count}";
+        _playerName.Text = $"{human.Name}   ·   Mazo {human.Deck.Count}  Cem {human.Graveyard.Count}  Dest {human.Banished.Count}";
         RefreshLpBar(_playerLp, _playerLpLabel, _humanLpCounter, _humanLpTrend);
 
         string turnLabel = _engine.IsOver ? "DUELO TERMINADO" : playerTurn ? "TU TURNO" : "TURNO DE LA CPU";
@@ -1036,8 +1061,9 @@ public partial class Duel : Control
         for (int i = state.Chain.Count - 1; i >= 0; i--)
         {
             var link = state.Chain[i];
-            var owner = state.GetPlayer(link.Controller);
-            string cardName = owner.SpellTrapZones[link.ZoneIndex]?.Card.Name ?? "?";
+            string cardName = link.CardIn(state)?.Name ?? "?";
+            if (link.MonsterEffect is { } monsterEffect)
+                cardName += $" (efecto {MonsterEffectCatalog.TypeLabel(monsterEffect.Effect.Type)})";
             string who = link.Controller == PlayerSide.Human ? "Vos" : "CPU";
             _chainList.AddItem($"[{i + 1}] {who}: {cardName}");
         }
@@ -1069,7 +1095,7 @@ public partial class Duel : Control
         var state = _engine.State;
         var human = state.Players[HumanIndex];
         var cpu = state.Players[CpuIndex];
-        if (state.PendingDiscardCount > 0) return;
+        if (state.PendingDiscardCount > 0 || state.PendingChoice != null) return;
 
         if (_targetMode)
         {
@@ -1352,9 +1378,17 @@ public partial class Duel : Control
 
         bool chainOpen = state.Chain.Count > 0;
         bool discarding = state.PendingDiscardCount > 0;
+        bool choosing = state.PendingChoice != null || _effectsMenuOpen;
 
-        _phaseButton.Visible = playerTurn && !chainOpen && !discarding;
-        _endTurnButton.Visible = playerTurn && !chainOpen && !discarding;
+        _phaseButton.Visible = playerTurn && !chainOpen && !discarding && !choosing;
+        _endTurnButton.Visible = playerTurn && !chainOpen && !discarding && !choosing;
+
+        int effectCount = !choosing && (playerTurn || state.ChainPendingResponder == PlayerSide.Human)
+            ? _engine.GetActivatableEffects(PlayerSide.Human).Count
+            : 0;
+        _effectsButton.Visible = effectCount > 0;
+        _effectsButton.Text = $"EFECTOS ({effectCount})";
+        if (choosing) playerTurn = false;
 
         if (playerTurn)
         {
@@ -1605,6 +1639,23 @@ public partial class Duel : Control
                     ShowBanner(fieldType.Name.ToUpperInvariant(), fieldType.Description, new Color(fieldType.Color).Lerp(Colors.White, 0.25f));
                 break;
             }
+            case MonsterEffectActivatedEvent effect:
+            {
+                _audio.PlaySfx("chain");
+                if (effect.Zone == CardZone.MonsterZone && ZoneButtonFor(ZoneKind.Monster, effect.Side, effect.ZoneIndex) is { } effectButton)
+                {
+                    FlashButton(effectButton, ColorForEvent(evt));
+                    PopButton(effectButton);
+                }
+                string who = effect.Side == PlayerSide.Human ? "Tu efecto" : "Efecto de la CPU";
+                ShowBanner($"EFECTO: {effect.Card.Name.ToUpperInvariant()}",
+                    $"{who}  ·  {MonsterEffectCatalog.TypeLabel(effect.EffectType)}  ·  desde {CardRef.ZoneName(effect.Zone)}",
+                    new Color(0.75f, 0.55f, 1f));
+                break;
+            }
+            case CardDiscardedEvent:
+                _audio.PlaySfx("set");
+                break;
             case StatModifierAppliedEvent statMod:
             {
                 var button = ZoneButtonFor(ZoneKind.Monster, statMod.Side, statMod.ZoneIndex);
@@ -1634,11 +1685,81 @@ public partial class Duel : Control
     /// <summary>Centro de una Zona del tablero en la pantalla (ya proyectado en perspectiva).</summary>
     private Vector2 ZoneScreenCenter(Control zoneButton) => _fieldView.ProjectToScreen(ButtonCenter(zoneButton));
 
+    // ------------------------------------------------- Efectos de Monstruo
+
+    /// <summary>
+    /// Muestra (o cierra) la ventana de la decision pendiente. Devuelve
+    /// verdadero si hay una decision que le toca al jugador: mientras tanto
+    /// el duelo (y la IA) esperan.
+    /// </summary>
+    private bool RefreshChoicePanel()
+    {
+        var choice = _engine.State.PendingChoice;
+        if (choice != null && choice.Chooser == PlayerSide.Human)
+        {
+            _effectsMenuOpen = false;
+            if (!ReferenceEquals(_choicePanel.ShownKey, choice)) ShowChoice(choice);
+            return true;
+        }
+
+        if (_choicePanel.ShownKey is ChoiceRequest) _choicePanel.HidePanel();
+        return false;
+    }
+
+    private void ShowChoice(ChoiceRequest choice)
+    {
+        ClearSelections();
+        string title = choice.Source?.Name ?? "Efecto";
+        switch (choice.Kind)
+        {
+            case ChoiceKind.YesNo:
+                _choicePanel.ShowYesNo(choice, title, choice.Prompt, yes => AnswerChoice(() => _engine.AnswerYesNo(yes)));
+                break;
+            case ChoiceKind.SelectOption:
+                _choicePanel.ShowOptions(choice, title, choice.Prompt, choice.Options, option => AnswerChoice(() => _engine.AnswerOption(option)));
+                break;
+            default:
+                _choicePanel.ShowCards(choice, title, choice.Prompt, choice.Candidates, choice.Min, choice.Max,
+                    indices => AnswerChoice(() => _engine.AnswerCards(indices)));
+                break;
+        }
+    }
+
+    private void AnswerChoice(Func<ActionResult> answer)
+    {
+        var result = answer();
+        Apply(result);
+        if (result.Success) _choicePanel.HidePanel();
+    }
+
+    /// <summary>Lista de efectos de Monstruo que puedes activar ahora (mano, Campo, Cementerio, desterradas).</summary>
+    private void OpenEffectsMenu()
+    {
+        var effects = _engine.GetActivatableEffects(PlayerSide.Human);
+        if (effects.Count == 0) return;
+        ClearSelections();
+        _effectsMenuOpen = true;
+        _choicePanel.ShowOptions("effects-menu", "EFECTOS DE MONSTRUO", "Elige el efecto que quieres activar.",
+            effects.Select(e => e.Label).ToList(),
+            index =>
+            {
+                _effectsMenuOpen = false;
+                _choicePanel.HidePanel();
+                Apply(_engine.ActivateMonsterEffect(effects[index]), clearOnSuccess: true);
+            },
+            () =>
+            {
+                _effectsMenuOpen = false;
+                _choicePanel.HidePanel();
+            });
+    }
+
     private static Color ColorForEvent(DuelEvent evt) => evt switch
     {
         MonsterSummonedEvent => new Color(0.55f, 0.85f, 1f),
         MonsterDestroyedEvent => new Color(1f, 0.35f, 0.3f),
         SpellTrapActivatedEvent => new Color(0.5f, 1f, 0.55f),
+        MonsterEffectActivatedEvent => new Color(0.8f, 0.6f, 1f),
         FieldChangedEvent => new Color(0.9f, 0.75f, 0.4f),
         StatModifierAppliedEvent => new Color(1f, 1f, 0.6f),
         _ => Colors.White

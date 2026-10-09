@@ -84,7 +84,8 @@ public sealed class CardRepository
             GuardianStar1 = source.GuardianStar1,
             GuardianStar2 = source.GuardianStar2,
             RitualMonsterId = source.RitualMonsterId,
-            RequiredRitualLevel = source.RequiredRitualLevel
+            RequiredRitualLevel = source.RequiredRitualLevel,
+            MonsterEffects = source.MonsterEffects.Select(CardDtoCloning.CloneMonsterEffect).ToList()
         };
     }
 

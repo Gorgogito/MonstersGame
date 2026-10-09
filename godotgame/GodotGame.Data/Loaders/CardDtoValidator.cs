@@ -80,6 +80,76 @@ public static class CardDtoValidator
             ValidateFusionMaterials(dto, errors);
 
         ValidateEffectIdOrComposedEffect(dto, errors);
+
+        if (dto.MonsterEffects.Count > 0 && category == MonsterCategory.Normal)
+            errors.Add("Un Monstruo Normal no tiene efectos: cambia la Categoria a Effect (o Fusion/Ritual).");
+        for (int i = 0; i < dto.MonsterEffects.Count; i++)
+            ValidateMonsterEffect(dto.MonsterEffects[i], $"Efecto {i + 1}", errors);
+    }
+
+    /// <summary>Valida un efecto de Monstruo compuesto: tipo, evento/zona, pasos y condiciones conocidos y coherentes con su uso.</summary>
+    private static void ValidateMonsterEffect(MonsterEffectDto effect, string label, List<string> errors)
+    {
+        if (!Enum.TryParse<GodotGame.Core.Effects.Monster.MonsterEffectType>(effect.Type, true, out var type))
+        {
+            errors.Add($"{label}: tipo de efecto \"{effect.Type}\" no reconocido.");
+            return;
+        }
+
+        bool continuous = type == GodotGame.Core.Effects.Monster.MonsterEffectType.Continuous;
+        if (type == GodotGame.Core.Effects.Monster.MonsterEffectType.Trigger
+            && (!Enum.TryParse<GodotGame.Core.Effects.Monster.EffectEvent>(effect.TriggerEvent, true, out var evt) || evt == GodotGame.Core.Effects.Monster.EffectEvent.None))
+            errors.Add($"{label}: un efecto Disparado necesita un evento que lo dispare.");
+        if (type is GodotGame.Core.Effects.Monster.MonsterEffectType.Ignition or GodotGame.Core.Effects.Monster.MonsterEffectType.Quick or GodotGame.Core.Effects.Monster.MonsterEffectType.Unclassified
+            && !Enum.TryParse<GodotGame.Core.Effects.Monster.EffectZone>(effect.ActivationZone, true, out _))
+            errors.Add($"{label}: zona de activacion \"{effect.ActivationZone}\" no reconocida.");
+
+        if (effect.Steps.Count == 0)
+            errors.Add($"{label}: agrega al menos un paso (lo que hace el efecto).");
+        if (continuous && (effect.Costs.Count > 0 || effect.HasTarget))
+            errors.Add($"{label}: un efecto Continuo no tiene costos ni objetivos.");
+
+        var usage = continuous ? GodotGame.Core.Effects.Monster.StepUsage.Continuous : GodotGame.Core.Effects.Monster.StepUsage.Action;
+        foreach (var step in effect.Steps)
+            ValidateMonsterEffectStep(step, usage, effect.HasTarget, label, errors);
+        foreach (var cost in effect.Costs)
+            ValidateMonsterEffectStep(cost, GodotGame.Core.Effects.Monster.StepUsage.Cost, effect.HasTarget, $"{label} (costo)", errors);
+        foreach (var condition in effect.ActivationConditions)
+            ValidateMonsterEffectCondition(condition, label, errors);
+    }
+
+    private static void ValidateMonsterEffectStep(MonsterEffectStepDto step, GodotGame.Core.Effects.Monster.StepUsage usage, bool hasTarget, string label, List<string> errors)
+    {
+        var info = GodotGame.Core.Effects.Monster.MonsterEffectCatalog.Step(step.ActionKind);
+        if (info == null)
+        {
+            errors.Add($"{label}: el paso \"{step.ActionKind}\" no existe.");
+            return;
+        }
+        if ((info.Usage & usage) == 0)
+        {
+            string where = usage switch
+            {
+                GodotGame.Core.Effects.Monster.StepUsage.Continuous => "en un efecto Continuo (solo pasos pasivos)",
+                GodotGame.Core.Effects.Monster.StepUsage.Cost => "como costo",
+                _ => "como accion (es un paso pasivo de efectos Continuos)"
+            };
+            errors.Add($"{label}: \"{info.Label}\" no se puede usar {where}.");
+        }
+
+        bool usesTargets = (step.Params.TryGetValue("UseTargets", out var useTargets) && useTargets == "true")
+                           || (step.Params.TryGetValue("Apply", out var apply) && apply == "Targets");
+        if (usesTargets && !hasTarget)
+            errors.Add($"{label}: \"{info.Label}\" usa los objetivos seleccionados, pero el efecto no selecciona objetivos.");
+
+        foreach (var condition in step.Conditions)
+            ValidateMonsterEffectCondition(condition, label, errors);
+    }
+
+    private static void ValidateMonsterEffectCondition(EffectConditionDto condition, string label, List<string> errors)
+    {
+        if (GodotGame.Core.Effects.Monster.MonsterEffectCatalog.Condition(condition.Kind) == null)
+            errors.Add($"{label}: la condicion \"{condition.Kind}\" no existe.");
     }
 
     private static void ValidateFusionMaterials(CardDto dto, List<string> errors)

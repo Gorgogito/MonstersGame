@@ -26,4 +26,12 @@ public sealed class DuelConfig
     /// El primer jugador no puede atacar en su primer turno (pagina 33).
     /// </summary>
     public bool FirstPlayerSkipsFirstBattle { get; init; } = true;
+
+    /// <summary>
+    /// Si es verdadero, cuando le toca la Prioridad en una Cadena a un jugador
+    /// que no tiene nada con que responder, el motor pasa por el
+    /// automaticamente (como en los juegos digitales). Falso por defecto para
+    /// que las pruebas controlen cada paso de la Cadena.
+    /// </summary>
+    public bool AutoPassWhenNoResponse { get; init; }
 }

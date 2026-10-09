@@ -1,4 +1,5 @@
 using GodotGame.Core.Entities;
+using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Requirements;
 
 namespace GodotGame.Core.Battle;
@@ -20,14 +21,16 @@ namespace GodotGame.Core.Battle;
 public static class EffectiveStats
 {
     public static int EffectiveAttack(CardInstance instance, DuelState state, Player controller) =>
-        instance.Card.Attack
-        + instance.ActiveModifiers.Sum(m => m.AttackAmount)
-        + FieldModifierSum(instance, state, controller, FieldStatKind.Attack);
+        Math.Max(0, instance.Card.Attack
+            + instance.ActiveModifiers.Sum(m => m.AttackAmount)
+            + FieldModifierSum(instance, state, controller, FieldStatKind.Attack)
+            + ContinuousEffects.StatBonus(instance, state).Attack);
 
     public static int EffectiveDefense(CardInstance instance, DuelState state, Player controller) =>
-        instance.Card.Defense
-        + instance.ActiveModifiers.Sum(m => m.DefenseAmount)
-        + FieldModifierSum(instance, state, controller, FieldStatKind.Defense);
+        Math.Max(0, instance.Card.Defense
+            + instance.ActiveModifiers.Sum(m => m.DefenseAmount)
+            + FieldModifierSum(instance, state, controller, FieldStatKind.Defense)
+            + ContinuousEffects.StatBonus(instance, state).Defense);
 
     private static int FieldModifierSum(CardInstance instance, DuelState state, Player controller, FieldStatKind stat)
     {

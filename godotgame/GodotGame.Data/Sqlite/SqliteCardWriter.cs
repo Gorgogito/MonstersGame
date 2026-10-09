@@ -28,6 +28,7 @@ public sealed class SqliteCardWriter
         SqliteSchema.EnsureCreated(_dbPath);
         using var connection = SqliteSchema.OpenConnection(_dbPath);
         var requirementLoader = new SqliteRequirementLoader(connection);
+        var monsterEffects = SqliteMonsterEffectStore.LoadAll(connection);
 
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -44,6 +45,7 @@ public sealed class SqliteCardWriter
             var dto = SqliteCardMapping.ReadDto(reader);
             dto.GuardianStar1 = reader.GetString(22);
             dto.GuardianStar2 = reader.GetString(23);
+            dto.MonsterEffects = monsterEffects.GetValueOrDefault(dto.Id) ?? new List<MonsterEffectDto>();
 
             if (!reader.IsDBNull(15))
             {
@@ -139,6 +141,8 @@ public sealed class SqliteCardWriter
         // en el futuro).
         if (isMonster && dto.Category.Equals("Fusion", StringComparison.OrdinalIgnoreCase))
             SaveFusionRecipe(connection, dto);
+
+        SqliteMonsterEffectStore.Save(connection, dto.Id, isMonster ? dto.MonsterEffects : new List<MonsterEffectDto>());
     }
 
     private static void SaveFusionRecipe(SqliteConnection connection, CardDto dto)

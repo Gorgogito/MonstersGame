@@ -1,4 +1,5 @@
 using GodotGame.Core.Effects;
+using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Entities;
 using GodotGame.Core.Requirements;
 using GodotGame.Core.Rules;
@@ -12,7 +13,7 @@ namespace GodotGame.Core.Battle;
 /// expone acciones que devuelven <see cref="ActionResult"/>. La UI y la IA usan
 /// exclusivamente esta API publica.
 /// </summary>
-public sealed class DuelEngine
+public sealed partial class DuelEngine
 {
     private readonly DuelConfig _config;
     private readonly FusionService _fusion;
@@ -58,6 +59,7 @@ public sealed class DuelEngine
 
         Log.Add($"Comienza el duelo. Inicia {State.ActivePlayer.Name}.");
         BeginTurn();
+        Pump();
     }
 
     // ----------------------------------------------------------- Flujo de turno
@@ -72,6 +74,7 @@ public sealed class DuelEngine
         foreach (var zone in player.SpellTrapZones)
             zone?.ResetTurnFlags();
         player.FieldZone?.ResetTurnFlags();
+        State.UsedOncePerTurn.Clear();
 
         State.Phase = DuelPhase.Draw;
         Log.Add($"--- Turno {State.TurnNumber}: {player.Name} ---");
@@ -89,7 +92,9 @@ public sealed class DuelEngine
             Log.Add($"{player.Name} roba una carta.");
         }
 
-        // Standby Phase se omite (sin efectos en esta version) y pasamos a Main 1.
+        // Standby Phase: solo dispara los efectos "durante tu Standby Phase"; luego Main 1.
+        State.Phase = DuelPhase.Standby;
+        RecordPhaseEvents(EffectEvent.StandbyPhase);
         State.Phase = DuelPhase.Main1;
     }
 
@@ -99,6 +104,8 @@ public sealed class DuelEngine
     public ActionResult AdvancePhase()
     {
         if (State.IsOver) return ActionResult.Fail("El duelo ha terminado.");
+        var pendingCheck = ValidateNoPendingChoice();
+        if (!pendingCheck.Success) return pendingCheck;
         var chainCheck = ValidateNoOpenChain();
         if (!chainCheck.Success) return chainCheck;
 
@@ -148,21 +155,21 @@ public sealed class DuelEngine
         if (State.IsOver) return ActionResult.Fail("El duelo ha terminado.");
         var chainCheck = ValidateNoOpenChain();
         if (!chainCheck.Success) return chainCheck;
+        var pendingCheck = ValidateNoPendingChoice();
+        if (!pendingCheck.Success) return pendingCheck;
         if (State.PendingDiscardCount > 0)
             return ActionResult.Fail($"Debes descartar {State.PendingDiscardCount} carta(s) antes de terminar el turno.");
+        if (_endTurnStage != EndTurnStage.None)
+            return ActionResult.Fail("El turno ya esta terminando.");
 
+        // End Phase: primero los efectos "durante tu End Phase", despues el
+        // limite de mano y recien entonces el cambio de turno (ver ContinueEndTurn).
         State.Phase = DuelPhase.End;
-        var player = State.ActivePlayer;
+        RecordPhaseEvents(EffectEvent.EndPhase);
+        _endTurnStage = EndTurnStage.HandLimit;
+        Pump();
 
-        int excess = player.Hand.Count - _config.MaxHandSize;
-        if (excess > 0)
-        {
-            State.PendingDiscardCount = excess;
-            Log.Add($"{player.Name} debe descartar {excess} carta(s) (limite de mano).");
-            return ActionResult.Ok("Selecciona cartas para descartar.");
-        }
-
-        return FinishEndTurn();
+        return State.PendingDiscardCount > 0 ? ActionResult.Ok("Selecciona cartas para descartar.") : ActionResult.Ok();
     }
 
     /// <summary>
@@ -189,22 +196,22 @@ public sealed class DuelEngine
         foreach (int i in indices.OrderByDescending(i => i))
         {
             var discard = player.Hand[i];
-            player.Hand.RemoveAt(i);
-            player.SendToGraveyard(discard);
+            CardMover.SendToGraveyard(State, new CardRef(discard, player.Side, CardZone.Hand, i), MoveCause.Rule, discard: true);
             Log.Add($"{player.Name} descarta {discard.Name} (limite de mano).");
         }
 
         State.PendingDiscardCount = 0;
-        return FinishEndTurn();
+        _endTurnStage = EndTurnStage.Finish;
+        Pump();
+        return ActionResult.Ok();
     }
 
-    private ActionResult FinishEndTurn()
+    private void FinishEndTurn()
     {
-        PruneTemporaryStatModifiers(State.ActivePlayer);
+        PruneTemporaryStatModifiers(State);
         State.ActiveIndex = 1 - State.ActiveIndex;
         State.TurnNumber++;
         BeginTurn();
-        return ActionResult.Ok();
     }
 
     /// <summary>
@@ -217,13 +224,18 @@ public sealed class DuelEngine
     /// durante el turno de su propio controlador -- no hace falta revisar los
     /// Monstruos del rival aqui.
     /// </summary>
-    private static void PruneTemporaryStatModifiers(Player player)
+    private static void PruneTemporaryStatModifiers(DuelState state)
     {
+        // "Hasta el final del turno" vence al final de CUALQUIER turno (un efecto
+        // de Monstruo puede aplicarlo en el turno rival o sobre un Monstruo rival).
+        foreach (var other in state.Players)
+            foreach (var instance in other.MonsterZones)
+                instance?.ActiveModifiers.RemoveAll(m => m.Duration == ModifierDuration.UntilEndOfTurn);
+
+        var player = state.ActivePlayer;
         foreach (var instance in player.MonsterZones)
         {
             if (instance == null) continue;
-
-            instance.ActiveModifiers.RemoveAll(m => m.Duration == ModifierDuration.UntilEndOfTurn);
 
             foreach (var modifier in instance.ActiveModifiers)
                 if (modifier.Duration == ModifierDuration.ForNTurns)
@@ -275,6 +287,8 @@ public sealed class DuelEngine
 
         Log.Add($"{player.Name} invoca a {monster.Name} ({monster.Attack}/{monster.Defense}) en Ataque.");
         State.Events.Enqueue(new MonsterSummonedEvent(player.Side, freeZone, monster, SummonKind.Normal));
+        CardMover.RecordSummon(State, monster, player.Side, freeZone, CardZone.Hand, MoveCause.Rule, EffectEvent.NormalSummoned);
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -310,6 +324,7 @@ public sealed class DuelEngine
         player.HasNormalSummonedThisTurn = true;
 
         Log.Add($"{player.Name} coloca un monstruo boca abajo.");
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -357,12 +372,8 @@ public sealed class DuelEngine
         // Enviar materiales al cementerio (mayor indice primero para no desplazar).
         int hi = Math.Max(handIndexA, handIndexB);
         int lo = Math.Min(handIndexA, handIndexB);
-        var matHi = player.Hand[hi];
-        var matLo = player.Hand[lo];
-        player.Hand.RemoveAt(hi);
-        player.Hand.RemoveAt(lo);
-        player.SendToGraveyard(matHi);
-        player.SendToGraveyard(matLo);
+        CardMover.SendToGraveyard(State, new CardRef(player.Hand[hi], player.Side, CardZone.Hand, hi), MoveCause.Rule);
+        CardMover.SendToGraveyard(State, new CardRef(player.Hand[lo], player.Side, CardZone.Hand, lo), MoveCause.Rule);
 
         var instance = new CardInstance(result, position) { SummonedThisTurn = true };
         player.MonsterZones[freeZone] = instance;
@@ -370,6 +381,8 @@ public sealed class DuelEngine
 
         Log.Add($"{player.Name} fusiona {a.Name} + {b.Name} => {result.Name} ({result.Attack}/{result.Defense}).");
         State.Events.Enqueue(new FusionPerformedEvent(player.Side, freeZone, new[] { a, b }, result));
+        CardMover.RecordSummon(State, result, player.Side, freeZone, CardZone.Deck, MoveCause.Rule, EffectEvent.SpecialSummoned);
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -416,11 +429,7 @@ public sealed class DuelEngine
 
         // Enviar materiales al cementerio (mayor indice primero para no desplazar).
         foreach (int i in indices.OrderByDescending(x => x))
-        {
-            var card = player.Hand[i];
-            player.Hand.RemoveAt(i);
-            player.SendToGraveyard(card);
-        }
+            CardMover.SendToGraveyard(State, new CardRef(player.Hand[i], player.Side, CardZone.Hand, i), MoveCause.Rule);
 
         var instance = new CardInstance(result, position) { SummonedThisTurn = true };
         player.MonsterZones[freeZone] = instance;
@@ -428,6 +437,8 @@ public sealed class DuelEngine
 
         Log.Add($"{player.Name} fusiona {materials.Count} materiales => {result.Name} ({result.Attack}/{result.Defense}).");
         State.Events.Enqueue(new FusionPerformedEvent(player.Side, freeZone, materials, result));
+        CardMover.RecordSummon(State, result, player.Side, freeZone, CardZone.Deck, MoveCause.Rule, EffectEvent.SpecialSummoned);
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -523,18 +534,14 @@ public sealed class DuelEngine
         foreach (int i in handTributes.OrderByDescending(x => x))
         {
             var card = player.Hand[i];
-            player.Hand.RemoveAt(i);
-            player.SendToGraveyard(card);
+            CardMover.SendToGraveyard(State, new CardRef(card, player.Side, CardZone.Hand, i), MoveCause.Rule);
             Log.Add($"{player.Name} sacrifica a {card.Name} para el Ritual.");
         }
         foreach (int z in fieldTributes)
         {
             var instance = player.MonsterZones[z]!;
-            player.MonsterZones[z] = null;
-            EquipCleanup.DetachEquipsTargeting(State, player.Side, z);
-            player.SendToGraveyard(instance.Card);
+            CardMover.SendToGraveyard(State, new CardRef(instance.Card, player.Side, CardZone.MonsterZone, z), MoveCause.Rule);
             Log.Add($"{player.Name} sacrifica a {instance.Card.Name} para el Ritual.");
-            State.Events.Enqueue(new MonsterDestroyedEvent(player.Side, z, instance.Card, DestructionCause.Cost));
         }
 
         // Se retiran por referencia (no por indice): los sacrificios de mano
@@ -549,6 +556,8 @@ public sealed class DuelEngine
 
         player.SendToGraveyard(spell);
         Log.Add($"{spell.Name} se manda al Cementerio tras la Invocacion Ritual.");
+        CardMover.RecordSummon(State, monster, player.Side, summonZone, CardZone.Hand, MoveCause.Rule, EffectEvent.SpecialSummoned);
+        Pump();
 
         return ActionResult.Ok();
     }
@@ -608,7 +617,10 @@ public sealed class DuelEngine
         monster.PositionChangedThisTurn = true;
         Log.Add($"{player.Name} invoca por Volteo a {monster.Card.Name} ({monster.Card.Attack}/{monster.Card.Defense}).");
         State.Events.Enqueue(new MonsterSummonedEvent(player.Side, zoneIndex, monster.Card, SummonKind.Flip));
+        CardMover.RecordInPlace(State, EffectEvent.Summoned, monster.Card, player.Side, CardZone.MonsterZone, MoveCause.Rule);
+        CardMover.RecordInPlace(State, EffectEvent.Flipped, monster.Card, player.Side, CardZone.MonsterZone, MoveCause.Rule);
         TriggerFlipEffect(player, monster);
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -677,6 +689,9 @@ public sealed class DuelEngine
     public ActionResult ActivateSpell(int handIndex, EffectTarget? target = null)
     {
         if (State.IsOver) return ActionResult.Fail("El duelo ha terminado.");
+        var pendingCheck = ValidateNoPendingChoice();
+        if (!pendingCheck.Success) return pendingCheck;
+        if (State.ChainResolving) return ActionResult.Fail("La Cadena se esta resolviendo.");
 
         var player = ChainActingPlayer();
         if (handIndex < 0 || handIndex >= player.Hand.Count)
@@ -695,6 +710,7 @@ public sealed class DuelEngine
 
             player.Hand.RemoveAt(handIndex);
             PlaceFieldSpell(player, spell);
+            Pump();
             return ActionResult.Ok();
         }
 
@@ -713,6 +729,7 @@ public sealed class DuelEngine
         player.Hand.RemoveAt(handIndex);
         player.SpellTrapZones[freeZone] = new SpellTrapInstance(spell, faceUp: true);
         AddChainLink(player.Side, freeZone, target);
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -725,6 +742,9 @@ public sealed class DuelEngine
     public ActionResult ActivateSetCard(int zoneIndex, EffectTarget? target = null)
     {
         if (State.IsOver) return ActionResult.Fail("El duelo ha terminado.");
+        var pendingCheck = ValidateNoPendingChoice();
+        if (!pendingCheck.Success) return pendingCheck;
+        if (State.ChainResolving) return ActionResult.Fail("La Cadena se esta resolviendo.");
 
         var player = ChainActingPlayer();
         var instance = GetSpellTrapZone(player, zoneIndex);
@@ -746,6 +766,7 @@ public sealed class DuelEngine
 
             instance.FaceUp = true;
             AddChainLink(player.Side, zoneIndex, target);
+            Pump();
             return ActionResult.Ok();
         }
 
@@ -762,6 +783,7 @@ public sealed class DuelEngine
 
             instance.FaceUp = true;
             AddChainLink(player.Side, zoneIndex, target);
+            Pump();
             return ActionResult.Ok();
         }
 
@@ -837,7 +859,8 @@ public sealed class DuelEngine
     private int TopChainLinkSpeed()
     {
         var top = State.Chain[^1];
-        var card = State.GetPlayer(top.Controller).SpellTrapZones[top.ZoneIndex]!.Card;
+        if (top.MonsterEffect is { } monsterEffect) return monsterEffect.Effect.SpellSpeed;
+        var card = State.GetPlayer(top.Controller).SpellTrapZones[top.ZoneIndex]?.Card;
         return card switch
         {
             SpellCard s => s.SpellSpeed,
@@ -868,16 +891,13 @@ public sealed class DuelEngine
     public ActionResult PassPriority()
     {
         if (State.IsOver) return ActionResult.Fail("El duelo ha terminado.");
+        var pendingCheck = ValidateNoPendingChoice();
+        if (!pendingCheck.Success) return pendingCheck;
         if (State.Chain.Count == 0) return ActionResult.Fail("No hay ninguna Cadena abierta.");
+        if (State.ChainResolving) return ActionResult.Fail("La Cadena se esta resolviendo.");
 
-        State.ChainConsecutivePasses++;
-        if (State.ChainConsecutivePasses >= 2)
-        {
-            ResolveChain();
-            return ActionResult.Ok();
-        }
-
-        State.ChainPendingResponder = Opponent(State.ChainPendingResponder!.Value);
+        PassInternal();
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -888,16 +908,16 @@ public sealed class DuelEngine
     /// tiene uno) y va al Cementerio, salvo que un Contraefecto ya la haya
     /// negado, en cuyo caso el efecto se salta pero la carta igual se resuelve.
     /// </summary>
-    private void ResolveChain()
+    private IEnumerable<ChoiceRequest> ResolveChainRoutine()
     {
         var negated = new HashSet<int>();
+        State.ChainResolving = true;
 
         for (int i = State.Chain.Count - 1; i >= 0; i--)
         {
+            if (State.IsOver) break;
             var link = State.Chain[i];
             var player = State.GetPlayer(link.Controller);
-            var instance = player.SpellTrapZones[link.ZoneIndex];
-            if (instance == null) continue; // ya no esta (defensivo)
 
             bool isNegated = negated.Contains(i);
             int capturedIndex = i;
@@ -906,15 +926,32 @@ public sealed class DuelEngine
                 if (capturedIndex > 0) negated.Add(capturedIndex - 1);
             }
 
+            if (link.MonsterEffect is { } activation)
+            {
+                if (isNegated)
+                {
+                    Log.Add($"La activacion del efecto de {activation.Source.Name} fue negada.");
+                    continue;
+                }
+                activation.NegateRespondedLink = NegateRespondedLink;
+                foreach (var request in ResolveMonsterEffectRoutine(activation)) yield return request;
+                continue;
+            }
+
+            var instance = link.ZoneIndex >= 0 ? player.SpellTrapZones[link.ZoneIndex] : null;
+            if (instance == null) continue; // ya no esta (defensivo)
+
             if (instance.Card is SpellCard spell)
                 ResolveSpell(player, spell, link, isNegated, NegateRespondedLink);
             else if (instance.Card is TrapCard trap)
                 ResolveTrap(player, trap, link, isNegated, NegateRespondedLink);
+            CheckLifePoints();
         }
 
         State.Chain.Clear();
         State.ChainPendingResponder = null;
         State.ChainConsecutivePasses = 0;
+        State.ChainResolving = false;
     }
 
     private static PlayerSide Opponent(PlayerSide side) =>
@@ -935,8 +972,8 @@ public sealed class DuelEngine
         }
 
         ExecuteRegisteredEffect(spell.EffectId, spell, player, link, negated, negateRespondedLink);
-        player.SpellTrapZones[link.ZoneIndex] = null;
-        player.SendToGraveyard(spell);
+        if (ReferenceEquals(player.SpellTrapZones[link.ZoneIndex]?.Card, spell))
+            CardMover.SendToGraveyard(State, new CardRef(spell, player.Side, CardZone.SpellTrapZone, link.ZoneIndex), MoveCause.Rule);
         Log.Add($"{spell.Name} se resuelve y va al Cementerio.");
     }
 
@@ -981,8 +1018,8 @@ public sealed class DuelEngine
         }
 
         ExecuteRegisteredEffect(trap.EffectId, trap, player, link, negated, negateRespondedLink);
-        player.SpellTrapZones[link.ZoneIndex] = null;
-        player.SendToGraveyard(trap);
+        if (ReferenceEquals(player.SpellTrapZones[link.ZoneIndex]?.Card, trap))
+            CardMover.SendToGraveyard(State, new CardRef(trap, player.Side, CardZone.SpellTrapZone, link.ZoneIndex), MoveCause.Rule);
         Log.Add($"{trap.Name} se resuelve y va al Cementerio.");
     }
 
@@ -1018,7 +1055,7 @@ public sealed class DuelEngine
 
         if (player.FieldZone != null)
         {
-            player.SendToGraveyard(player.FieldZone.Card);
+            CardMover.SendToGraveyard(State, new CardRef(player.FieldZone.Card, player.Side, CardZone.FieldZone, 0), MoveCause.Rule);
             Log.Add($"{player.Name} manda al Cementerio su anterior Carta Magica de Campo.");
         }
 
@@ -1063,6 +1100,8 @@ public sealed class DuelEngine
     public ActionResult DeclareAttack(int attackerZone, int targetZone)
     {
         if (State.IsOver) return ActionResult.Fail("El duelo ha terminado.");
+        var pendingCheck = ValidateNoPendingChoice();
+        if (!pendingCheck.Success) return pendingCheck;
         var chainCheck = ValidateNoOpenChain();
         if (!chainCheck.Success) return chainCheck;
         if (State.Phase != DuelPhase.Battle)
@@ -1086,7 +1125,7 @@ public sealed class DuelEngine
 
         if (targetZone == -1)
         {
-            if (opponentHasMonsters)
+            if (opponentHasMonsters && !ContinuousEffects.CanAttackDirectly(attacker, State))
                 return ActionResult.Fail("No puedes atacar directamente: el adversario tiene monstruos.");
 
             var directOutcome = BattleResolver.ResolveDirectAttack(attacker, State, attackerPlayer);
@@ -1098,6 +1137,9 @@ public sealed class DuelEngine
                 attacker.Card, null, null, false, false,
                 directOutcome.DamageToDefender, 0, false, 0, directOutcome.DamageToDefender, ++_attackSerial,
                 attacker.GuardianStar, null, 0, 0);
+            if (directOutcome.DamageToDefender > 0)
+                CardMover.RecordInPlace(State, EffectEvent.InflictsBattleDamage, attacker.Card, attackerPlayer.Side, CardZone.MonsterZone, MoveCause.Battle);
+            Pump();
             return ActionResult.Ok();
         }
 
@@ -1112,6 +1154,7 @@ public sealed class DuelEngine
         {
             defender.Position = BattlePosition.DefenseFaceUp;
             Log.Add($"Se voltea {defender.Card.Name} ({defender.Card.Attack}/{defender.Card.Defense}).");
+            CardMover.RecordInPlace(State, EffectEvent.Flipped, defender.Card, defenderPlayer.Side, CardZone.MonsterZone, MoveCause.Battle);
         }
 
         // Valores efectivos capturados antes de aplicar destrucciones: despues
@@ -1126,17 +1169,20 @@ public sealed class DuelEngine
         var outcome = BattleResolver.Resolve(attacker, defender, State, attackerPlayer, defenderPlayer);
         Log.Add($"{attacker.Card.Name} ataca a {defender.Card.Name}.");
 
-        // Aplicar destrucciones.
-        if (outcome.DefenderDestroyed)
+        // Aplicar destrucciones (salvo "no puede ser destruida en batalla").
+        bool defenderDestroyed = outcome.DefenderDestroyed && !ContinuousEffects.IsBattleIndestructible(defender, State);
+        bool attackerDestroyed = outcome.AttackerDestroyed && !ContinuousEffects.IsBattleIndestructible(attacker, State);
+        if (outcome.DefenderDestroyed && !defenderDestroyed) Log.Add($"{defender.Card.Name} no puede ser destruido en batalla.");
+        if (outcome.AttackerDestroyed && !attackerDestroyed) Log.Add($"{attacker.Card.Name} no puede ser destruido en batalla.");
+
+        if (defenderDestroyed)
         {
-            DestroyMonster(defenderPlayer, targetZone);
-            State.Events.Enqueue(new MonsterDestroyedEvent(defenderPlayer.Side, targetZone, defender.Card, DestructionCause.Battle));
+            CardMover.SendToGraveyard(State, new CardRef(defender.Card, defenderPlayer.Side, CardZone.MonsterZone, targetZone), MoveCause.Battle, destroy: true);
             Log.Add($"{defender.Card.Name} es destruido.");
         }
-        if (outcome.AttackerDestroyed)
+        if (attackerDestroyed)
         {
-            DestroyMonster(attackerPlayer, attackerZone);
-            State.Events.Enqueue(new MonsterDestroyedEvent(attackerPlayer.Side, attackerZone, attacker.Card, DestructionCause.Battle));
+            CardMover.SendToGraveyard(State, new CardRef(attacker.Card, attackerPlayer.Side, CardZone.MonsterZone, attackerZone), MoveCause.Battle, destroy: true);
             Log.Add($"{attacker.Card.Name} es destruido.");
         }
 
@@ -1145,11 +1191,14 @@ public sealed class DuelEngine
         {
             ApplyDamage(defenderPlayer, outcome.DamageToDefender);
             Log.Add($"{defenderPlayer.Name} recibe {outcome.DamageToDefender} de daño.");
+            CardMover.RecordInPlace(State, EffectEvent.InflictsBattleDamage, attacker.Card, attackerPlayer.Side, CardZone.MonsterZone, MoveCause.Battle);
         }
         if (outcome.DamageToAttacker > 0)
         {
             ApplyDamage(attackerPlayer, outcome.DamageToAttacker);
             Log.Add($"{attackerPlayer.Name} recibe {outcome.DamageToAttacker} de daño.");
+            if (defender.Position == BattlePosition.Attack)
+                CardMover.RecordInPlace(State, EffectEvent.InflictsBattleDamage, defender.Card, defenderPlayer.Side, CardZone.MonsterZone, MoveCause.Battle);
         }
 
         CheckLifePoints();
@@ -1162,10 +1211,11 @@ public sealed class DuelEngine
 
         State.LastAttack = new AttackInfo(attackerPlayer.Side, attackerZone, targetZone,
             attacker.Card, defender.Card, defender.Position,
-            outcome.AttackerDestroyed, outcome.DefenderDestroyed,
+            attackerDestroyed, defenderDestroyed,
             values.AttackerValue, values.DefenderValue, wasFlipped,
             outcome.DamageToAttacker, outcome.DamageToDefender, ++_attackSerial,
             attacker.GuardianStar, defender.GuardianStar, values.AttackerStarBonus, values.DefenderStarBonus);
+        Pump();
         return ActionResult.Ok();
     }
 
@@ -1174,6 +1224,9 @@ public sealed class DuelEngine
     private ActionResult ValidateMainPhaseAction()
     {
         if (State.IsOver) return ActionResult.Fail("El duelo ha terminado.");
+        var pendingCheck = ValidateNoPendingChoice();
+        if (!pendingCheck.Success) return pendingCheck;
+        if (_endTurnStage != EndTurnStage.None) return ActionResult.Fail("El turno esta terminando.");
         var chainCheck = ValidateNoOpenChain();
         if (!chainCheck.Success) return chainCheck;
         if (State.Phase is not (DuelPhase.Main1 or DuelPhase.Main2))
@@ -1228,11 +1281,8 @@ public sealed class DuelEngine
         foreach (var z in zones)
         {
             var sacrificed = player.MonsterZones[z]!;
-            player.MonsterZones[z] = null;
-            EquipCleanup.DetachEquipsTargeting(State, player.Side, z);
-            player.SendToGraveyard(sacrificed.Card);
+            CardMover.SendToGraveyard(State, new CardRef(sacrificed.Card, player.Side, CardZone.MonsterZone, z), MoveCause.Rule);
             Log.Add($"{player.Name} sacrifica a {sacrificed.Card.Name}.");
-            State.Events.Enqueue(new MonsterDestroyedEvent(player.Side, z, sacrificed.Card, DestructionCause.Cost));
         }
         return ActionResult.Ok();
     }
@@ -1279,15 +1329,6 @@ public sealed class DuelEngine
         }
 
         return (handIndices, fieldZones);
-    }
-
-    private void DestroyMonster(Player player, int zoneIndex)
-    {
-        var instance = player.MonsterZones[zoneIndex];
-        if (instance == null) return;
-        player.MonsterZones[zoneIndex] = null;
-        EquipCleanup.DetachEquipsTargeting(State, player.Side, zoneIndex);
-        player.SendToGraveyard(instance.Card);
     }
 
     private static void ApplyDamage(Player player, int amount)

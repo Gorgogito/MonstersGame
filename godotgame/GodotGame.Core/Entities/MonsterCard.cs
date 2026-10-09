@@ -51,6 +51,14 @@ public sealed class MonsterCard : Card
     public string EffectId { get; }
 
     /// <summary>
+    /// Efectos de Monstruo compuestos por datos (Continuo, de Encendido,
+    /// Disparado, Rapido, de Volteo o No clasificado; ver
+    /// <see cref="GodotGame.Core.Effects.Monster.MonsterEffect"/>). Independiente
+    /// del <see cref="EffectId"/> heredado (efecto de Volteo de un solo paso).
+    /// </summary>
+    public IReadOnlyList<GodotGame.Core.Effects.Monster.MonsterEffect> Effects { get; }
+
+    /// <summary>
     /// Numero de Sacrificios necesarios para la Invocacion Normal (pagina 20):
     /// Nivel 1-4 = 0, Nivel 5-6 = 1, Nivel 7+ = 2. No aplica a Fusion/Ritual,
     /// que nunca se Invocan de Modo Normal.
@@ -70,7 +78,8 @@ public sealed class MonsterCard : Card
         string image = "",
         string description = "",
         GuardianStar? guardianStar1 = null,
-        GuardianStar? guardianStar2 = null)
+        GuardianStar? guardianStar2 = null,
+        IReadOnlyList<GodotGame.Core.Effects.Monster.MonsterEffect>? effects = null)
         : base(id, name, image, description)
     {
         Attack = attack;
@@ -80,6 +89,7 @@ public sealed class MonsterCard : Card
         Attribute = attribute;
         Category = category;
         EffectId = effectId ?? string.Empty;
+        Effects = effects ?? Array.Empty<GodotGame.Core.Effects.Monster.MonsterEffect>();
 
         var defaults = GodotGame.Core.Rules.GuardianStars.DefaultsFor(attribute);
         GuardianStar1 = guardianStar1 ?? defaults.First;

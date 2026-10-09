@@ -145,7 +145,7 @@ public class SqliteMigrationsTests
         command.CommandText = "PRAGMA user_version";
         long version = (long)command.ExecuteScalar()!;
 
-        Assert.Equal(10, version);
+        Assert.Equal(11, version);
     }
 
     [Fact]

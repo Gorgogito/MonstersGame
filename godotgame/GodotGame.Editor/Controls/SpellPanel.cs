@@ -19,7 +19,7 @@ public sealed partial class SpellPanel : VBoxContainer
     private readonly TypeRepository _typeRepo;
 
     private readonly OptionButton _subTypeCombo = new();
-    private readonly OptionButton _effectCombo = new();
+    private readonly OptionButton _effectCombo = new() { FitToLongestItem = false, ClipText = true };
 
     private readonly VBoxContainer _ritualSection;
     private readonly SpinBox _ritualMonsterIdBox = new() { MinValue = 0, MaxValue = 999999 };

@@ -1,4 +1,5 @@
 using GodotGame.Core.Battle;
+using GodotGame.Core.Effects.Monster;
 using GodotGame.Core.Entities;
 
 namespace GodotGame.Core.Effects;
@@ -35,11 +36,9 @@ public sealed class DestroyTargetMonsterAction : ITargetedEffectAction
         var instance = player.MonsterZones[target.ZoneIndex];
         if (instance == null) return;
 
-        player.MonsterZones[target.ZoneIndex] = null;
-        EquipCleanup.DetachEquipsTargeting(ctx.State, target.Side, target.ZoneIndex);
-        player.SendToGraveyard(instance.Card);
+        CardMover.SendToGraveyard(ctx.State, new CardRef(instance.Card, target.Side, CardZone.MonsterZone, target.ZoneIndex),
+            new MoveCause(CauseKind.Effect, ctx.Controller.Side, ctx.Source), destroy: true);
         ctx.State.Log.Add($"{ctx.Source.Name} destruye a {instance.Card.Name}.");
-        ctx.State.Events.Enqueue(new MonsterDestroyedEvent(target.Side, target.ZoneIndex, instance.Card, DestructionCause.Effect));
     }
 }
 
@@ -70,10 +69,9 @@ public sealed class SpecialSummonFromOwnGraveyardAction : ITargetedEffectAction
         int freeZone = ctx.Controller.FirstFreeMonsterZone();
         if (freeZone == -1) return;
 
-        ctx.Controller.Graveyard.RemoveAt(target.ZoneIndex);
-        ctx.Controller.MonsterZones[freeZone] = new CardInstance(monster, BattlePosition.Attack) { SummonedThisTurn = true };
+        CardMover.SpecialSummon(ctx.State, new CardRef(monster, ctx.Controller.Side, CardZone.Graveyard, target.ZoneIndex),
+            ctx.Controller.Side, BattlePosition.Attack, new MoveCause(CauseKind.Effect, ctx.Controller.Side, ctx.Source));
         ctx.State.Log.Add($"{ctx.Controller.Name} invoca de Modo Especial a {monster.Name} desde el Cementerio.");
-        ctx.State.Events.Enqueue(new MonsterSummonedEvent(ctx.Controller.Side, freeZone, monster, SummonKind.Special));
     }
 }
 

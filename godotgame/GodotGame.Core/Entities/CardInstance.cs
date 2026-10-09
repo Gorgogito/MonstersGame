@@ -33,6 +33,13 @@ public sealed class CardInstance
     /// <summary>Verdadero cuando el controlador ya eligio la estrella (ver <c>DuelEngine.ChooseGuardianStar</c>).</summary>
     public bool GuardianStarChosen { get; set; }
 
+    /// <summary>
+    /// Dueño de la carta si es distinto de quien la controla (ej. un efecto la
+    /// Invoco al Campo del adversario). Null = la controla su dueño. Al salir
+    /// del Campo vuelve al Cementerio/mano de su dueño.
+    /// </summary>
+    public PlayerSide? Owner { get; set; }
+
     public CardInstance(MonsterCard card, BattlePosition position)
     {
         Card = card;
