@@ -43,6 +43,12 @@ public sealed class CardInstance
     /// <summary>Como entro al Campo (Normal, Colocada, por Volteo, Especial, Fusion o Ritual).</summary>
     public SummonMethod SummonMethod { get; set; } = SummonMethod.Special;
 
+    /// <summary>"No es afectada por efectos de monstruos" (ej. una Trampa Invocada como monstruo).</summary>
+    public bool UnaffectedByMonsterEffects { get; set; }
+
+    /// <summary>"Destierrala cuando deje el Campo": en vez de ir al Cementerio, la mano o el Deck, se destierra.</summary>
+    public bool BanishWhenLeavesField { get; set; }
+
     /// <summary>Nivel ganado/perdido por efectos (ver <see cref="ActiveStatModifier.LevelAmount"/>).</summary>
     public int EffectiveLevel => Math.Max(1, Card.Level + ActiveModifiers.Sum(m => m.LevelAmount));
 

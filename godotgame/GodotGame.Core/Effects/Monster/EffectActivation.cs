@@ -55,9 +55,10 @@ public sealed class EffectActivation
 
     /// <summary>
     /// Solo al resolverse en la Cadena: cambia el efecto del eslabon al que
-    /// responde por "Tu adversario descarta N carta(s)" (N = el argumento).
+    /// responde por "Tu adversario descarta N carta(s)" (N = el primer
+    /// argumento; el segundo = "al azar").
     /// </summary>
-    public Action<int>? ReplaceRespondedLink { get; set; }
+    public Action<int, bool>? ReplaceRespondedLink { get; set; }
 
     /// <summary>
     /// El eslabon de la Cadena al que respondia este efecto al activarse

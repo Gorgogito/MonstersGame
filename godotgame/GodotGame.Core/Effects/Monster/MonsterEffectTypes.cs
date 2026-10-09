@@ -103,7 +103,10 @@ public enum EffectEvent
     EndPhase,
 
     /// <summary>Deja el Campo (destruida, desterrada, devuelta a la mano o al Deck, Sacrificada...).</summary>
-    LeavesField
+    LeavesField,
+
+    /// <summary>Se activa (la carta Magica/Trampa misma, al ponerse boca arriba en la Cadena). Util con "otra carta": "cuando se activa una Trampa".</summary>
+    CardActivated
 }
 
 /// <summary>Desde donde se puede activar un efecto de Encendido/Rapido/No clasificado ("esta carta" debe estar ahi).</summary>

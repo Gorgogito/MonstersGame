@@ -127,7 +127,9 @@ public static class CardDtoValidator
             && !Enum.TryParse<GodotGame.Core.Effects.Monster.EffectZone>(effect.ActivationZone, true, out _))
             errors.Add($"{label}: zona de activacion \"{effect.ActivationZone}\" no reconocida.");
 
-        if (effect.Steps.Count == 0)
+        // Una Trampa/Magia Continua puede activarse solo pagando un costo (ej. "activa esta carta pagando 1000 LP").
+        bool costOnlyActivation = type == GodotGame.Core.Effects.Monster.MonsterEffectType.Activation && effect.Costs.Count > 0;
+        if (effect.Steps.Count == 0 && !costOnlyActivation)
             errors.Add($"{label}: agrega al menos un paso (lo que hace el efecto).");
         if (continuous && (effect.Costs.Count > 0 || effect.HasTarget))
             errors.Add($"{label}: un efecto Continuo no tiene costos ni objetivos.");

@@ -17,9 +17,10 @@ public static class ContinuousEffects
 
     private static IEnumerable<ActiveEffect> Active(DuelState state)
     {
+        bool monstersNegated = LastingEffects.MonsterEffectsNegated(state);
         foreach (var player in state.Players)
         {
-            for (int zone = 0; zone < player.MonsterZones.Length; zone++)
+            for (int zone = 0; zone < player.MonsterZones.Length && !monstersNegated; zone++)
             {
                 var instance = player.MonsterZones[zone];
                 if (instance is not { IsFaceUp: true }) continue;
@@ -106,6 +107,7 @@ public static class ContinuousEffects
         }
 
         if (p.GetBool("ExcludeSource") && ReferenceEquals(active.Monster, target)) return false;
+        if (active.Monster != null && target.UnaffectedByMonsterEffects) return false;
         if (!CardQuery.Sides(p.GetEnum("Side", RelativeSide.Own), active.Side).Contains(targetRef.Side)) return false;
         if (!target.IsFaceUp) return false;
         var query = new CardQuery(p.With("From", "MonsterZone"));

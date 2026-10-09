@@ -105,6 +105,19 @@ public sealed class DuelState
     /// <summary>Recetas de Fusion del duelo (para "Invoca por Fusion ..." de los efectos). Lo establece <see cref="DuelEngine.StartDuel"/>.</summary>
     public GodotGame.Core.Services.FusionService? Fusion { get; set; }
 
+    /// <summary>
+    /// Monstruos recien Invocados por una accion (no por un efecto en plena
+    /// Cadena) mientras el adversario decide si responde: los que puede
+    /// negar un efecto "cuando un monstruo fuera a ser Invocado".
+    /// </summary>
+    public List<GodotGame.Core.Effects.Monster.CardRef> PendingSummons { get; } = new();
+
+    /// <summary>Quien Invoco a <see cref="PendingSummons"/>.</summary>
+    public PlayerSide? PendingSummonsBy { get; set; }
+
+    /// <summary>Efectos que duran varios turnos y revisan las cartas que roba un jugador (ej. "destruye las que robe hasta el final de su 3er turno").</summary>
+    public List<GodotGame.Core.Effects.Monster.DrawWatch> DrawWatches { get; } = new();
+
     /// <summary>Azar del duelo (elecciones "al azar" de los efectos). Reemplazable para pruebas deterministas.</summary>
     public Random Rng { get; set; } = new();
 

@@ -110,6 +110,10 @@ public static class CardMover
     /// </summary>
     public static bool SendToGraveyard(DuelState state, CardRef card, MoveCause cause, bool discard = false, bool destroy = false)
     {
+        if (destroy && Locate(state, card) is { Zone: CardZone.MonsterZone } onField && LastingEffects.TrySubstituteDestruction(state, onField, cause))
+            return false;
+        if (BanishesOnLeave(state, card)) return Banish(state, card, cause);
+
         var owner = Detach(state, card, out _, cause, CardZone.Graveyard);
         if (owner == null) return false;
 
@@ -138,6 +142,33 @@ public static class CardMover
         return true;
     }
 
+    /// <summary>Si la carta es un monstruo en el Campo que debe desterrarse al dejarlo.</summary>
+    private static bool BanishesOnLeave(DuelState state, CardRef card) =>
+        Locate(state, card) is { Zone: CardZone.MonsterZone } located && located.MonsterInstance(state) is { BanishWhenLeavesField: true };
+
+    /// <summary>
+    /// Invoca de Modo Especial una carta que no es un Monstruo (ej. una Trampa)
+    /// como el monstruo <paramref name="asMonster"/>. Devuelve la Zona usada o -1.
+    /// </summary>
+    public static int SummonCardAsMonster(DuelState state, CardRef card, MonsterCard asMonster, PlayerSide toSide, BattlePosition position, MoveCause cause,
+        bool unaffectedByMonsterEffects, bool banishWhenLeavesField)
+    {
+        if (SummonLocked(state, Summoner(cause, toSide))) return -1;
+        var target = state.GetPlayer(toSide);
+        if (target.FirstFreeMonsterZone() == -1) return -1;
+        if (Detach(state, card, out _, cause, CardZone.MonsterZone) == null) return -1;
+        int zone = target.FirstFreeMonsterZone();
+        target.MonsterZones[zone] = new CardInstance(asMonster, position)
+        {
+            SummonedThisTurn = true, SummonMethod = SummonMethod.Special,
+            UnaffectedByMonsterEffects = unaffectedByMonsterEffects, BanishWhenLeavesField = banishWhenLeavesField
+        };
+        state.GetPlayer(Summoner(cause, toSide)).HasSummonedThisTurn = true;
+        RecordSummon(state, asMonster, toSide, zone, card.Zone, cause, EffectEvent.SpecialSummoned);
+        state.Events.Enqueue(new MonsterSummonedEvent(toSide, zone, asMonster, SummonKind.Special));
+        return zone;
+    }
+
     /// <summary>Destierra la carta (al Destierro de su dueño).</summary>
     public static bool Banish(DuelState state, CardRef card, MoveCause cause)
     {
@@ -155,6 +186,7 @@ public static class CardMover
     /// <summary>Añade la carta a la mano de su dueño (desde el Deck, Cementerio, Destierro o el Campo).</summary>
     public static bool AddToHand(DuelState state, CardRef card, MoveCause cause)
     {
+        if (BanishesOnLeave(state, card)) return Banish(state, card, cause);
         var owner = Detach(state, card, out _, cause, CardZone.Hand);
         if (owner == null) return false;
         state.GetPlayer(owner.Value).Hand.Add(card.Card);
@@ -164,6 +196,7 @@ public static class CardMover
     /// <summary>Pone la carta en la parte inferior del Deck de su dueño.</summary>
     public static bool ToDeckBottom(DuelState state, CardRef card, MoveCause cause)
     {
+        if (BanishesOnLeave(state, card)) return Banish(state, card, cause);
         var owner = Detach(state, card, out _, cause, CardZone.Deck);
         if (owner == null) return false;
         state.GetPlayer(owner.Value).Deck.Add(card.Card);
@@ -173,6 +206,7 @@ public static class CardMover
     /// <summary>Pone la carta en la parte superior del Deck de su dueño (se roba primero).</summary>
     public static bool ToDeckTop(DuelState state, CardRef card, MoveCause cause)
     {
+        if (BanishesOnLeave(state, card)) return Banish(state, card, cause);
         var owner = Detach(state, card, out _, cause, CardZone.Deck);
         if (owner == null) return false;
         state.GetPlayer(owner.Value).Deck.Insert(0, card.Card);

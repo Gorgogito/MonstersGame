@@ -1,3 +1,4 @@
+using GodotGame.Core.Battle;
 using GodotGame.Core.Entities;
 
 namespace GodotGame.Core.Effects.Monster;
@@ -81,6 +82,7 @@ public static class MonsterEffectCatalog
         new(EffectEvent.InflictsBattleDamage, "Inflige daño de batalla a tu adversario", ""),
         new(EffectEvent.StandbyPhase, "Durante tu Standby Phase", "Si está boca arriba en el Campo."),
         new(EffectEvent.EndPhase, "Durante tu End Phase", "Si está boca arriba en el Campo."),
+        new(EffectEvent.CardActivated, "Se activa (Mágica/Trampa)", "La carta se activa en la Cadena. Con \"Otra carta que cumpla el filtro\" (Clase = Trampa): \"cuando una Carta de Trampa es activada mientras esta carta está en tu Cementerio\". El efecto se aplica cuando esa Cadena termina de resolverse."),
         new(EffectEvent.LeavesField, "Deja el Campo", "Destruida, desterrada, devuelta a la mano o al Deck, Sacrificada... Combínalo con la condición \"El evento fue causado por ...\" para \"a causa de una carta del adversario\"."),
     };
 
@@ -150,6 +152,8 @@ public static class MonsterEffectCatalog
         P("CardId", "Carta específica", ParamType.Card, "0", help: "Una carta concreta por nombre (ej. \"Las Puertas del Mundo Oscuro\")."),
         P("NameContains", "Nombre contiene (arquetipo)", ParamType.Text, "", help: "Para cartas de un arquetipo: \"Mundo Oscuro\" busca todas las cartas cuyo nombre lo contenga. Vacío = cualquiera."),
         P("SubType", "Subtipo (Mágica/Trampa)", ParamType.Choice, "Any", SubTypeOptions, "Ej. \"Trampa Normal\": Clase = Trampa y Subtipo = Normal."),
+        P("AttackMin", "ATK mínimo", ParamType.Int, "-1", help: "-1 = sin mínimo. \"con 2000 ATK o más\" = 2000. En el Campo cuenta el ATK actual."),
+        P("AttackMax", "ATK máximo", ParamType.Int, "-1", help: "-1 = sin máximo. \"con 1500 ATK o menos\" = 1500."),
         P("SameNameAsSource", "Solo cartas con el nombre de esta", ParamType.Bool, "false"),
         P("ExcludeSourceName", "Excepto cartas con el nombre de esta", ParamType.Bool, "false", help: "\"... excepto 'Nombre de esta carta'\"."),
         P("ExcludeSource", "Excepto esta misma carta", ParamType.Bool, "false"),
@@ -276,8 +280,33 @@ public static class MonsterEffectCatalog
         new("summon_lock", "No puedes Invocar el resto del turno", "\"No puedes Invocar monstruos en el turno en que activas esta carta, excepto por este efecto (pero puedes Colocar)\": ponlo DESPUÉS de la Invocación del efecto. Para que no se pueda activar si ya Invocaste, agrega la condición \"Ya Invocaste un monstruo este turno\" con Negar.", StepUsage.Action,
             Array.Empty<ParamInfo>(), () => new SummonLockStep()),
 
-        new("replace_responded_effect", "Cambiar el efecto activado por \"descarta\"", "Para efectos Rápidos de respuesta: \"el efecto activado se convierte en 'Tu adversario descarta 1 carta'\". Se aplica al eslabón al que responde (quien lo activó hace que SU adversario descarte).", StepUsage.Action,
-            new[] { P("Count", "Cartas a descartar", ParamType.Int, "1") }, () => new ReplaceRespondedEffectStep()),
+        new("replace_responded_effect", "Cambiar el efecto activado por \"descarta\"", "Para efectos Rápidos o Trampas de respuesta: \"el efecto activado se convierte en 'Tu adversario descarta 1 carta'\". Se aplica al eslabón al que responde (quien lo activó hace que SU adversario descarte).", StepUsage.Action,
+            new[] { P("Count", "Cartas a descartar", ParamType.Int, "1"), P("Random", "Al azar", ParamType.Bool, "false", help: "\"Tu adversario descarta 1 carta al azar\".") },
+            () => new ReplaceRespondedEffectStep()),
+
+        new("negate_summon", "Negar la Invocación (y destruir)", "\"Cuando uno o más monstruos fueran a ser Invocados: niega la Invocación y destruye esos monstruos\". Úsalo en una Trampa con la condición \"Un monstruo del adversario está siendo Invocado\": aparece una ventana para activarla cuando el adversario Invoca (Normal, por Volteo, por Fusión/Ritual o por procedimiento).", StepUsage.Action,
+            Array.Empty<ParamInfo>(), () => new NegateSummonStep()),
+
+        new("declare_card_discard", "Declarar un nombre de carta", "\"Declara 1 nombre de carta; si esa carta está en la mano de tu adversario, debe descartar todas sus copias; de otro modo tú descartas 1 carta al azar\".", StepUsage.Action,
+            new[] { P("Who", "Mano revisada", ParamType.Choice, "Opponent", WhoOptions.Take(2).ToArray()),
+                    P("PenaltyIfMissing", "Si no está: tú descartas 1 al azar", ParamType.Bool, "true") },
+            () => new DeclareCardDiscardStep()),
+
+        new("watch_draws", "Revisar los robos durante N turnos", "\"Mira todas las cartas que robe tu adversario hasta el final de su 3er turno después de que esta carta se resuelva, y destruye los monstruos con 1500 ATK o menos\". El filtro de abajo dice qué cartas robadas se destruyen.", StepUsage.Action,
+            new[] { P("Who", "Robos de", ParamType.Choice, "Opponent", WhoOptions.Take(2).ToArray()), P("Turns", "Turnos", ParamType.Int, "3") }
+                .Concat(FilterParams("Monster")).ToList(),
+            () => new WatchDrawsStep()),
+
+        new("special_summon_self_as_monster", "Invocar esta Mágica/Trampa como monstruo", "\"Puedes Invocar esta carta de Modo Especial como un Monstruo Normal (Aqua/AGUA/Nivel 2/ATK 1200/DEF 0)\". Funciona desde el Cementerio (o la mano/desterrada).", StepUsage.Action,
+            new[]
+            {
+                P("Type", "Tipo", ParamType.MonsterType, "Aqua"), P("Attribute", "Atributo", ParamType.Attribute, "Water"),
+                P("Level", "Nivel", ParamType.Int, "2"), P("Attack", "ATK", ParamType.Int, "1200"), P("Defense", "DEF", ParamType.Int, "0"),
+                P("Position", "Posición", ParamType.Choice, "Attack", PositionOptions.Take(2).ToArray()),
+                P("UnaffectedByMonsterEffects", "No es afectada por efectos de monstruos", ParamType.Bool, "true"),
+                P("BanishWhenLeavesField", "Destiérrala cuando deje el Campo", ParamType.Bool, "true"),
+            },
+            () => new SpecialSummonSelfAsMonsterStep()),
 
         new("deck_bottom", "Poner cartas de la mano bajo el Deck", "\"Tu adversario pone en la parte inferior de su Deck exactamente N cartas de su mano, en cualquier orden\".", StepUsage.Action,
             new[] { P("Who", "Quién", ParamType.Choice, "Opponent", WhoOptions), P("Count", "Cantidad", ParamType.Int, "2"),
@@ -307,6 +336,20 @@ public static class MonsterEffectCatalog
 
         new("battle_indestructible", "No puede ser destruido en batalla", "Continuo: esta carta (o el monstruo equipado, o los que cumplan el filtro) no puede ser destruido en batalla.", StepUsage.Continuous,
             PassiveParams().Concat(FilterParams("Monster")).ToList(), () => new PassiveStep()),
+
+        new("negate_monster_effects", "Negar los efectos de los monstruos boca arriba", "Continuo (Mágica/Trampa): \"Niega los efectos de todos los monstruos boca arriba mientras estén boca arriba en el Campo (pero sus efectos todavía pueden ser activados)\". Sus efectos Continuos dejan de aplicarse y los que se activan en el Campo se resuelven sin efecto.", StepUsage.Continuous,
+            Array.Empty<ParamInfo>(), () => new PassiveStep()),
+
+        new("destruction_substitute", "Desterrarse del Cementerio en lugar de una destrucción", "Continuo desde el Cementerio: \"Si uno o más monstruos 'Mundo Oscuro' que controlas fueran a ser destruidos en batalla o por efecto de una carta del adversario, puedes desterrar esta carta de tu Cementerio en su lugar\". Se aplica automáticamente. El filtro dice qué monstruos protege.", StepUsage.Continuous,
+            new[]
+            {
+                P("ByBattle", "Destruidos en batalla", ParamType.Bool, "true"),
+                P("ByOpponentEffect", "Por efecto de una carta del adversario", ParamType.Bool, "true"),
+                P("ByAnyEffect", "Por efecto de cualquier carta", ParamType.Bool, "false"),
+                P("OncePerTurn", "Solo una vez por turno", ParamType.Bool, "true"),
+                P("Side", "Monstruos de", ParamType.Choice, "Own", SideOptions.Take(1).ToArray()),
+            }.Concat(FilterParams("Monster")).ToList(),
+            () => new PassiveStep()),
 
         new("direct_attack", "Puede atacar directamente", "Continuo: esta carta (o el monstruo equipado, o los que cumplan el filtro) puede atacar directamente aunque el adversario controle monstruos.", StepUsage.Continuous,
             PassiveParams().Concat(FilterParams("Monster")).ToList(), () => new PassiveStep()),
@@ -386,6 +429,10 @@ public static class MonsterEffectCatalog
 
         new("not_sent_to_graveyard_this_turn", "Esta carta NO fue mandada al Cementerio este turno", "\"... excepto en el turno en el que esta carta fue mandada al Cementerio\".",
             Array.Empty<ParamInfo>(), (ctx, _) => !ctx.State.SentToGraveyardThisTurn.Contains(ctx.Source)),
+
+        new("responding_to_summon", "Un monstruo del adversario está siendo Invocado", "Para Trampas como \"cuando uno o más monstruos fueran a ser Invocados\": la carta se ofrece en una ventana justo cuando tu adversario Invoca (Normal, por Volteo, Fusión, Ritual o por procedimiento; no las Invocaciones a mitad de una Cadena).",
+            Array.Empty<ParamInfo>(),
+            (ctx, _) => ctx.State.PendingSummonsBy is { } by && by != ctx.ControllerSide && ctx.State.PendingSummons.Any(r => CardMover.Locate(ctx.State, r) != null)),
 
         new("summoned_this_turn", "Ya Invocaste un monstruo este turno", "Con Negar: \"no puedes activar esta carta si ya Invocaste este turno\" (Colocar no cuenta).",
             Array.Empty<ParamInfo>(), (ctx, _) => ctx.Controller.HasSummonedThisTurn),

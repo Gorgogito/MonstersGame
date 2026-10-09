@@ -54,6 +54,9 @@ public sealed class ChoiceRequest
     /// </summary>
     public bool IsResponseWindow { get; set; }
 
+    /// <summary>Que se esta eligiendo, para la IA (ej. "declare_name": declarar el nombre de una carta).</summary>
+    public string Tag { get; set; } = "";
+
     public bool Answered { get; private set; }
     public bool Yes { get; private set; }
     public IReadOnlyList<int> Selected { get; private set; } = Array.Empty<int>();

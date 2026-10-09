@@ -139,6 +139,7 @@ internal sealed class DrawStep : IMonsterEffectStep
                 if (!player.DrawCard()) break;
                 drawn.Add(new CardRef(player.Hand[^1], side, CardZone.Hand, player.Hand.Count - 1));
                 got++;
+                LastingEffects.OnDraw(ctx.State, side, player.Hand[^1]);
             }
             if (count > 0) ctx.Log($"{player.Name} roba {got} carta(s) por el efecto de {ctx.Source.Name}.");
         }
@@ -471,7 +472,7 @@ internal sealed class DestroyAllStep : IMonsterEffectStep
     {
         var query = new CardQuery(p, "SpellTrapZone", RelativeSide.Opponent);
         var all = query.Candidates(ctx.State, ctx.ControllerSide, ctx.Source, ctx.CurrentSourceRef() ?? ctx.Activation.SourceRef)
-            .Where(c => c.Zone is CardZone.MonsterZone or CardZone.SpellTrapZone or CardZone.FieldZone)
+            .Where(c => c.Zone is CardZone.MonsterZone or CardZone.SpellTrapZone or CardZone.FieldZone or CardZone.Hand)
             .ToList();
         var destroyed = new List<Card>();
         foreach (var card in all)
@@ -848,7 +849,7 @@ internal sealed class ReplaceRespondedEffectStep : IMonsterEffectStep
 {
     public IEnumerable<ChoiceRequest> Run(MonsterEffectContext ctx, EffectActionParams p)
     {
-        ctx.Activation.ReplaceRespondedLink?.Invoke(Math.Max(1, p.GetInt("Count", 1)));
+        ctx.Activation.ReplaceRespondedLink?.Invoke(Math.Max(1, p.GetInt("Count", 1)), p.GetBool("Random"));
         ctx.Activation.LastStepSucceeded = ctx.Activation.ReplaceRespondedLink != null;
         yield break;
     }
@@ -958,5 +959,127 @@ internal sealed class FusionSummonStep : IMonsterEffectStep
         ctx.State.Events.Enqueue(new FusionPerformedEvent(ctx.ControllerSide, zone, materials, chosen.Result));
         ctx.Log($"{ctx.Controller.Name} Invoca por Fusión a {chosen.Result.Name} ({string.Join(" + ", materials.Select(m => m.Name))}).");
         StepHelpers.Succeeded(ctx, new[] { new CardRef(chosen.Result, ctx.ControllerSide, CardZone.MonsterZone, zone) });
+    }
+}
+
+// ------------------------------------------------------------------ Trampas: Invocaciones, nombres, robos
+
+/// <summary>
+/// "Niega la Invocacion y, si lo haces, destruye ese o esos monstruos": el o
+/// los monstruos recien Invocados (ver <see cref="Battle.DuelState.PendingSummons"/>)
+/// se destruyen y sus efectos "si es Invocado" ya no se activan.
+/// </summary>
+internal sealed class NegateSummonStep : IMonsterEffectStep
+{
+    public bool CanRun(MonsterEffectContext ctx, EffectActionParams p) => Live(ctx).Count > 0;
+
+    private static List<CardRef> Live(MonsterEffectContext ctx) =>
+        ctx.State.PendingSummons.Select(r => CardMover.Locate(ctx.State, r)).Where(r => r != null).Select(r => r!).ToList();
+
+    public IEnumerable<ChoiceRequest> Run(MonsterEffectContext ctx, EffectActionParams p)
+    {
+        var negated = new List<Card>();
+        foreach (var summoned in Live(ctx))
+        {
+            ctx.State.TriggerEvents.RemoveAll(e => ReferenceEquals(e.Card, summoned.Card)
+                && e.Kind is EffectEvent.Summoned or EffectEvent.NormalSummoned or EffectEvent.SpecialSummoned or EffectEvent.SpecialSummonedByEffect or EffectEvent.Flipped);
+            ctx.Log($"Se niega la Invocación de {summoned.Card.Name}.");
+            if (CardMover.SendToGraveyard(ctx.State, summoned, ctx.Cause, destroy: true)) negated.Add(summoned.Card);
+        }
+        ctx.State.PendingSummons.Clear();
+        StepHelpers.Succeeded(ctx, negated);
+        yield break;
+    }
+}
+
+/// <summary>
+/// "Declara 1 nombre de carta; si esa carta esta en la mano de tu adversario,
+/// debe descartar todas sus copias; si no, tu descartas 1 carta al azar".
+/// </summary>
+internal sealed class DeclareCardDiscardStep : IMonsterEffectStep
+{
+    public IEnumerable<ChoiceRequest> Run(MonsterEffectContext ctx, EffectActionParams p)
+    {
+        var names = (ctx.State.Fusion?.Database.AllCards ?? ctx.State.Players.SelectMany(pl => pl.Deck.Concat(pl.Hand).Concat(pl.Graveyard)))
+            .Select(c => c.Name.Trim()).Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase).ToList();
+        if (names.Count == 0) { StepHelpers.Succeeded(ctx, Array.Empty<Card>()); yield break; }
+
+        var ask = ChoiceRequest.Pick(ctx.ControllerSide, $"{ctx.Source.Name}: declara el nombre de una carta.", ctx.Source, names);
+        ask.Tag = "declare_name";
+        yield return ask;
+        string declared = names[Math.Clamp(ask.Option, 0, names.Count - 1)];
+        ctx.Log($"{ctx.Controller.Name} declara \"{declared}\".");
+
+        var side = p.GetEnum("Who", WhoKind.Opponent) == WhoKind.Controller ? ctx.ControllerSide : ctx.OpponentSide;
+        var player = ctx.State.GetPlayer(side);
+        var copies = CardQuery.Enumerate(player, side, CardZone.Hand)
+            .Where(c => string.Equals(c.Card.Name.Trim(), declared, StringComparison.CurrentCultureIgnoreCase)).ToList();
+        var discarded = new List<CardRef>();
+        if (copies.Count > 0)
+        {
+            foreach (var copy in copies.OrderByDescending(c => c.Index))
+                if (CardMover.SendToGraveyard(ctx.State, copy, ctx.Cause, discard: true))
+                    discarded.Add(new CardRef(copy.Card, side, CardZone.Graveyard, player.Graveyard.Count - 1));
+            ctx.Log($"{player.Name} tenía {copies.Count} copia(s) y las descarta.");
+        }
+        else if (p.GetBool("PenaltyIfMissing", true) && ctx.Controller.Hand.Count > 0)
+        {
+            var random = CardQuery.Enumerate(ctx.Controller, ctx.ControllerSide, CardZone.Hand).OrderBy(_ => ctx.State.Rng.Next()).First();
+            ctx.Log($"No estaba en la mano: {ctx.Controller.Name} descarta {random.Card.Name} al azar.");
+            CardMover.SendToGraveyard(ctx.State, random, ctx.Cause, discard: true);
+        }
+        StepHelpers.Succeeded(ctx, discarded);
+    }
+}
+
+/// <summary>
+/// "Mira todas las cartas que robe tu adversario hasta el final de su N.º
+/// turno despues de que esta carta se resuelva, y destruye las que cumplan ...".
+/// </summary>
+internal sealed class WatchDrawsStep : IMonsterEffectStep
+{
+    public IEnumerable<ChoiceRequest> Run(MonsterEffectContext ctx, EffectActionParams p)
+    {
+        var watched = p.GetEnum("Who", WhoKind.Opponent) == WhoKind.Controller ? ctx.ControllerSide : ctx.OpponentSide;
+        int turns = Math.Max(1, p.GetInt("Turns", 3));
+        ctx.State.DrawWatches.Add(new DrawWatch
+        {
+            Source = ctx.Source, Controller = ctx.ControllerSide, Watched = watched, Filter = p,
+            StartTurn = ctx.State.TurnNumber, TurnsLeft = turns
+        });
+        ctx.Log($"{ctx.Source.Name} revisará las cartas que robe {ctx.State.GetPlayer(watched).Name} durante sus próximos {turns} turnos.");
+        ctx.Activation.LastStepSucceeded = true;
+        yield break;
+    }
+}
+
+/// <summary>
+/// "Puedes Invocar esta carta de Modo Especial como un Monstruo Normal (Tipo /
+/// Atributo / Nivel / ATK / DEF)" para una Magia/Trampa en el Cementerio. Puede
+/// quedar "no afectada por efectos de monstruos" y "desterrada cuando deje el Campo".
+/// </summary>
+internal sealed class SpecialSummonSelfAsMonsterStep : IMonsterEffectStep
+{
+    public bool CanRun(MonsterEffectContext ctx, EffectActionParams p) =>
+        ctx.Source is SpellCard or TrapCard && ctx.CurrentSourceRef() is { Zone: CardZone.Graveyard or CardZone.Hand or CardZone.Banished }
+        && ctx.Controller.FirstFreeMonsterZone() != -1;
+
+    public IEnumerable<ChoiceRequest> Run(MonsterEffectContext ctx, EffectActionParams p)
+    {
+        var self = ctx.CurrentSourceRef();
+        if (self == null || !CanRun(ctx, p)) { StepHelpers.Succeeded(ctx, Array.Empty<Card>()); yield break; }
+
+        var source = ctx.Source;
+        var monster = new MonsterCard(source.Id, source.Name, Math.Max(0, p.GetInt("Attack")), Math.Max(0, p.GetInt("Defense")),
+            Math.Clamp(p.GetInt("Level", 1), 1, 12), p.GetString("Type", "Aqua"), p.GetEnum("Attribute", MonsterAttribute.Water),
+            MonsterCategory.Normal, image: source.Image, description: source.Description);
+        var position = p.GetEnum("Position", PositionChoice.Attack) == PositionChoice.Defense ? BattlePosition.DefenseFaceUp : BattlePosition.Attack;
+        int zone = CardMover.SummonCardAsMonster(ctx.State, self, monster, ctx.ControllerSide, position, ctx.Cause,
+            p.GetBool("UnaffectedByMonsterEffects", true), p.GetBool("BanishWhenLeavesField", true));
+        if (zone < 0) { StepHelpers.Succeeded(ctx, Array.Empty<Card>()); yield break; }
+        ctx.Log($"{source.Name} es Invocada de Modo Especial como Monstruo Normal ({monster.Type}/{monster.Attribute}/Nivel {monster.Level}/ATK {monster.Attack}/DEF {monster.Defense}).");
+        ctx.Activation.SourceRef = new CardRef(monster, ctx.ControllerSide, CardZone.MonsterZone, zone);
+        StepHelpers.Succeeded(ctx, new[] { (Card)monster });
     }
 }

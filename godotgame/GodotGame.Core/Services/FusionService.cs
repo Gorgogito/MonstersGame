@@ -23,6 +23,9 @@ public sealed class FusionService
 
     public int RecipeCount => _recipes.Count;
 
+    /// <summary>Todas las cartas del juego (para efectos como "declara 1 nombre de carta").</summary>
+    public CardDatabase Database => _database;
+
     /// <summary>
     /// Intenta fusionar dos cartas. Devuelve la carta de monstruo resultante o
     /// null si no existe una receta valida para ese par. Solo resuelve recetas

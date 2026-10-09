@@ -53,6 +53,8 @@ public sealed class CardQuery
     public bool ExcludeSourceName { get; }
     public bool ExcludeSource { get; }
     public string NameContains { get; }
+    public int AttackMin { get; }
+    public int AttackMax { get; }
     public SubTypeFilter SubType { get; }
     public FaceFilter Face { get; }
     public int Count { get; }
@@ -75,6 +77,8 @@ public sealed class CardQuery
         ExcludeSource = p.GetBool("ExcludeSource");
         NameContains = p.GetString("NameContains").Trim().Trim('"', '\'', '“', '”');
         SubType = p.GetEnum("SubType", SubTypeFilter.Any);
+        AttackMin = p.GetInt("AttackMin", -1);
+        AttackMax = p.GetInt("AttackMax", -1);
         Face = p.GetEnum("Face", FaceFilter.Any);
         Count = Math.Max(1, p.GetInt("Count", 1));
         Min = Math.Clamp(p.GetInt("Min", Count), 0, Count);
@@ -110,6 +114,8 @@ public sealed class CardQuery
                 foreach (var candidate in Enumerate(player, side, zone))
                 {
                     if (!Matches(state, candidate, source)) continue;
+                    // "No es afectada por efectos de monstruos".
+                    if (source is MonsterCard && candidate.MonsterInstance(state) is { UnaffectedByMonsterEffects: true }) continue;
                     if (ExcludeSource && sourceRef != null && candidate.Zone == sourceRef.Zone && candidate.Side == sourceRef.Side
                         && ReferenceEquals(candidate.Card, sourceRef.Card) && (candidate.Zone is CardZone.MonsterZone or CardZone.SpellTrapZone ? candidate.Index == sourceRef.Index : true))
                         continue;
@@ -170,12 +176,19 @@ public sealed class CardQuery
         };
         if (!kindOk) return false;
 
-        if (LevelMin > 0 || LevelMax > 0 || !string.IsNullOrWhiteSpace(Type) || Attribute != null)
+        if (LevelMin > 0 || LevelMax > 0 || !string.IsNullOrWhiteSpace(Type) || Attribute != null || AttackMin >= 0 || AttackMax >= 0)
         {
             if (card is not MonsterCard monster) return false;
             int level = candidate.MonsterInstance(state)?.EffectiveLevel ?? monster.Level;
             if (LevelMin > 0 && level < LevelMin) return false;
             if (LevelMax > 0 && level > LevelMax) return false;
+            if (AttackMin >= 0 || AttackMax >= 0)
+            {
+                var instance = candidate.MonsterInstance(state);
+                int attack = instance != null ? EffectiveStats.EffectiveAttack(instance, state, state.GetPlayer(candidate.Side)) : monster.Attack;
+                if (AttackMin >= 0 && attack < AttackMin) return false;
+                if (AttackMax >= 0 && attack > AttackMax) return false;
+            }
             if (!string.IsNullOrWhiteSpace(Type) && !string.Equals(monster.Type, Type, StringComparison.OrdinalIgnoreCase)) return false;
             if (Attribute != null && monster.Attribute != Attribute) return false;
         }

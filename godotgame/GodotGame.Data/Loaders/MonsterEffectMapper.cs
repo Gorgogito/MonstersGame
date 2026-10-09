@@ -114,6 +114,8 @@ public static class MonsterEffectMapper
         if (Get("Attribute") is { Length: > 0 } attribute) words.Add(attribute);
         if (int.TryParse(Get("LevelMin", "0"), out int min) && min > 0) words.Add($"Nivel ≥{min}");
         if (int.TryParse(Get("LevelMax", "0"), out int max) && max > 0) words.Add($"Nivel ≤{max}");
+        if (int.TryParse(Get("AttackMin", "-1"), out int atkMin) && atkMin >= 0) words.Add($"ATK ≥{atkMin}");
+        if (int.TryParse(Get("AttackMax", "-1"), out int atkMax) && atkMax >= 0) words.Add($"ATK ≤{atkMax}");
         if (int.TryParse(Get("CardId", "0"), out int id) && id > 0) words.Add($"\"{cardName?.Invoke(id) ?? "#" + id}\"");
         if (Get("NameContains") is { Length: > 0 } archetype) words.Add($"\"{archetype}\"");
         if (Get("SubType", "Any") is var subType && subType != "Any") words.Add(subType switch

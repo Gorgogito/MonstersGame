@@ -40,6 +40,9 @@ public sealed partial class DuelEngine
     /// <summary>Jugador que tiene la ventana de respuesta a un ataque (puede activar sin ser su turno y sin Cadena).</summary>
     private PlayerSide? _windowSide;
 
+    /// <summary>Eventos de Invocacion que ya tuvieron su ventana de respuesta.</summary>
+    private readonly HashSet<TriggerEvent> _summonWindowSeen = new(ReferenceEqualityComparer.Instance);
+
     // ------------------------------------------------------------ Elecciones
 
     /// <summary>Responde una <see cref="ChoiceKind.YesNo"/> pendiente.</summary>
@@ -137,6 +140,8 @@ public sealed partial class DuelEngine
                     }
                     return;
                 }
+
+                if (TryOpenSummonWindow()) continue;
 
                 if (State.TriggerEvents.Count > 0)
                 {
@@ -324,6 +329,8 @@ public sealed partial class DuelEngine
         {
             Log.Add($"{player.Name} activa {activation.Source.Name}.");
             if (chainZoneIndex >= 0) State.Events.Enqueue(new SpellTrapActivatedEvent(activation.Controller, chainZoneIndex, activation.Source));
+            CardMover.RecordInPlace(State, EffectEvent.CardActivated, activation.Source, activation.Controller,
+                chainZoneIndex >= 0 ? CardZone.SpellTrapZone : CardZone.FieldZone, new MoveCause(CauseKind.Rule, activation.Controller, activation.Source));
         }
         else
         {
@@ -418,6 +425,15 @@ public sealed partial class DuelEngine
         var ctx = new MonsterEffectContext(State, activation);
         activation.LastStepSucceeded = true;
 
+        // "Niega los efectos de los monstruos boca arriba": se resuelve sin efecto si sigue boca arriba en el Campo.
+        if (activation.Source is MonsterCard && activation.Effect.Type != MonsterEffectType.Activation
+            && ctx.CurrentSourceRef() is { Zone: CardZone.MonsterZone } onField && onField.IsFaceUp(State)
+            && LastingEffects.MonsterEffectsNegated(State))
+        {
+            Log.Add($"El efecto de {activation.Source.Name} está negado.");
+            yield break;
+        }
+
         foreach (var step in activation.Effect.Steps)
         {
             if (!MonsterEffectCatalog.AllMet(step.Conditions, ctx))
@@ -465,6 +481,9 @@ public sealed partial class DuelEngine
     {
         var events = State.TriggerEvents.ToList();
         State.TriggerEvents.Clear();
+        _summonWindowSeen.Clear();
+        State.PendingSummons.Clear();
+        State.PendingSummonsBy = null;
 
         var pending = new List<EffectActivation>();
         foreach (var evt in events)
@@ -719,6 +738,86 @@ public sealed partial class DuelEngine
             yield break;
         }
         AddChainLink(player.Side, zone, target);
+    }
+
+    /// <summary>
+    /// Despues de una Invocacion hecha por un jugador (no por un efecto a
+    /// mitad de Cadena): si su adversario tiene Colocada una carta que responde
+    /// a Invocaciones ("cuando un monstruo fuera a ser Invocado"), le pregunta
+    /// si la activa antes de que se apliquen los efectos "si es Invocado".
+    /// </summary>
+    private bool TryOpenSummonWindow()
+    {
+        if (State.Chain.Count > 0) return false;
+        var summons = State.TriggerEvents.Where(e => e.Kind == EffectEvent.Summoned && e.Cause.Kind == CauseKind.Rule && !_summonWindowSeen.Contains(e)).ToList();
+        if (summons.Count == 0) return false;
+        foreach (var evt in summons) _summonWindowSeen.Add(evt);
+
+        var summoner = summons[0].Cause.By ?? summons[0].Controller;
+        State.PendingSummonsBy = summoner;
+        State.PendingSummons.Clear();
+        foreach (var evt in summons)
+        {
+            var onField = CardQuery.Enumerate(State.GetPlayer(evt.Controller), evt.Controller, CardZone.MonsterZone).LastOrDefault(c => ReferenceEquals(c.Card, evt.Card));
+            if (onField != null) State.PendingSummons.Add(onField);
+        }
+        if (State.PendingSummons.Count == 0) return false;
+
+        var responder = Opponent(summoner);
+        var options = SummonWindowOptions(responder);
+        if (options.Count == 0) return false;
+        string names = string.Join(", ", State.PendingSummons.Select(r => r.Card.Name));
+        _routines.Push(WindowRoutine(responder, () => SummonWindowOptions(responder),
+            $"{State.GetPlayer(summoner).Name} Invoca a {names}. ¿Activas una carta?", State.PendingSummons[0].Card).GetEnumerator());
+        return true;
+    }
+
+    /// <summary>Cartas Colocadas (y efectos Rapidos) que responden a una Invocacion: las que tienen la condicion "un monstruo del adversario esta siendo Invocado".</summary>
+    private List<WindowOption> SummonWindowOptions(PlayerSide side)
+    {
+        var options = new List<WindowOption>();
+        var player = State.GetPlayer(side);
+        _windowSide = side;
+        try
+        {
+            for (int zone = 0; zone < player.SpellTrapZones.Length; zone++)
+            {
+                var instance = player.SpellTrapZones[zone];
+                if (instance == null || instance.FaceUp || instance.SetThisTurn) continue;
+                if (instance.Card is not (TrapCard or SpellCard { SubType: SpellSubType.QuickPlay })) continue;
+                if (instance.Card.ActivationEffect is not { } effect || !effect.ActivationConditions.Any(c => c.Kind == "responding_to_summon")) continue;
+                if (!CanActivateSetCardNow(player, zone)) continue;
+                int captured = zone;
+                options.Add(new WindowOption($"Activar {instance.Card.Name} (Colocada)", () => ActivateSetCardInWindow(player, captured, null)));
+            }
+            foreach (var effect in GetActivatableEffects(side).Where(e => e.Effect.Type == MonsterEffectType.Quick && e.Effect.ActivationConditions.Any(c => c.Kind == "responding_to_summon")))
+            {
+                var captured = effect;
+                options.Add(new WindowOption($"Efecto de {effect.Label}", () => ActivationRoutine(
+                    new EffectActivation(captured.Card.Card, captured.Effect, captured.EffectIndex, side, captured.Card))));
+            }
+        }
+        finally
+        {
+            _windowSide = null;
+        }
+        return options;
+    }
+
+    /// <summary>Pregunta a <paramref name="side"/> que activa (opcion 0 = nada) y lo activa.</summary>
+    private IEnumerable<ChoiceRequest> WindowRoutine(PlayerSide side, Func<List<WindowOption>> optionsFor, string prompt, Card source)
+    {
+        var options = optionsFor();
+        if (options.Count == 0) yield break;
+
+        var ask = ChoiceRequest.Pick(side, prompt, source, new[] { "No activar nada" }.Concat(options.Select(o => o.Label)).ToList());
+        ask.IsResponseWindow = true;
+        yield return ask;
+        if (ask.Option <= 0 || ask.Option > options.Count) yield break;
+
+        _windowSide = side;
+        foreach (var request in options[ask.Option - 1].Start()) yield return request;
+        _windowSide = null;
     }
 
     /// <summary>Si el defensor tiene algo que activar, pausa el ataque y le pregunta. Devuelve verdadero si el ataque quedo pendiente.</summary>

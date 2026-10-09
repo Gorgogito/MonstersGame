@@ -147,7 +147,10 @@ public sealed class BasicCpuAI : IDuelAI
             case ChoiceKind.Reveal:
                 return engine.AcknowledgeReveal().Success;
             case ChoiceKind.SelectOption:
-                // Ventana de respuesta a un ataque: la opcion 0 es "No activar nada".
+                // "Declara 1 nombre de carta": la CPU no ve tu mano, declara uno al azar.
+                if (choice.Tag == "declare_name")
+                    return engine.AnswerOption(engine.State.Rng.Next(choice.Options.Count)).Success;
+                // Ventana de respuesta (ataque o Invocacion): la opcion 0 es "No activar nada".
                 return engine.AnswerOption(choice.IsResponseWindow && choice.Options.Count > 1 ? 1 : 0).Success;
         }
 

@@ -99,6 +99,7 @@ public sealed partial class DuelEngine
                 return;
             }
             Log.Add($"{player.Name} roba una carta.");
+            LastingEffects.OnDraw(State, player.Side, player.Hand[^1]);
         }
 
         // Standby Phase: solo dispara los efectos "durante tu Standby Phase"; luego Main 1.
@@ -220,6 +221,7 @@ public sealed partial class DuelEngine
     private void FinishEndTurn()
     {
         PruneTemporaryStatModifiers(State);
+        LastingEffects.OnTurnEnd(State);
         State.ActiveIndex = 1 - State.ActiveIndex;
         State.TurnNumber++;
         BeginTurn();
@@ -663,6 +665,11 @@ public sealed partial class DuelEngine
         if (monster.Card.Category != MonsterCategory.Effect) return;
         var action = EffectDefinitionResolver.Get(monster.Card.EffectId);
         if (action == null) return;
+        if (LastingEffects.MonsterEffectsNegated(State))
+        {
+            Log.Add($"El efecto de Volteo de {monster.Card.Name} está negado.");
+            return;
+        }
 
         Log.Add($"VOLTEO: se activa el efecto de {monster.Card.Name}.");
         action.Resolve(new EffectContext { State = State, Controller = player, Source = monster.Card });
@@ -981,6 +988,7 @@ public sealed partial class DuelEngine
         State.ChainPendingResponder = Opponent(controller);
         Log.Add($"{State.GetPlayer(controller).Name} encadena {card.Name} (Eslabon {State.Chain.Count}).");
         State.Events.Enqueue(new SpellTrapActivatedEvent(controller, zoneIndex, card));
+        CardMover.RecordInPlace(State, EffectEvent.CardActivated, card, controller, CardZone.SpellTrapZone, new MoveCause(CauseKind.Rule, controller, card));
     }
 
     /// <summary>
@@ -1011,7 +1019,7 @@ public sealed partial class DuelEngine
     private IEnumerable<ChoiceRequest> ResolveChainRoutine()
     {
         var negated = new HashSet<int>();
-        var replaced = new Dictionary<int, int>();
+        var replaced = new Dictionary<int, (int Count, bool Random)>();
         State.ChainResolving = true;
 
         for (int i = State.Chain.Count - 1; i >= 0; i--)
@@ -1027,17 +1035,17 @@ public sealed partial class DuelEngine
                 if (capturedIndex > 0) negated.Add(capturedIndex - 1);
             }
 
-            void ReplaceRespondedLink(int discards)
+            void ReplaceRespondedLink(int discards, bool random)
             {
-                if (capturedIndex > 0) replaced[capturedIndex - 1] = discards;
+                if (capturedIndex > 0) replaced[capturedIndex - 1] = (discards, random);
             }
 
             // "El efecto activado se convierte en 'Tu adversario descarta N carta(s)'".
-            if (!isNegated && replaced.TryGetValue(i, out int replacedDiscards))
+            if (!isNegated && replaced.TryGetValue(i, out var replacement))
             {
                 var source = link.CardIn(State);
-                Log.Add($"El efecto de {source?.Name ?? "la carta"} se convierte en \"Tu adversario descarta {replacedDiscards} carta(s)\".");
-                foreach (var request in ReplacedEffectRoutine(link, source, replacedDiscards)) yield return request;
+                Log.Add($"El efecto de {source?.Name ?? "la carta"} se convierte en \"Tu adversario descarta {replacement.Count} carta(s){(replacement.Random ? " al azar" : "")}\".");
+                foreach (var request in ReplacedEffectRoutine(link, source, replacement.Count, replacement.Random)) yield return request;
                 if (link.ZoneIndex >= 0) FinishSpellTrapResolution(player, link, negated: true);
                 CheckLifePoints();
                 continue;
@@ -1106,11 +1114,11 @@ public sealed partial class DuelEngine
     }
 
     /// <summary>El efecto de un eslabon reemplazado: quien lo activo hace que su adversario descarte N carta(s).</summary>
-    private IEnumerable<ChoiceRequest> ReplacedEffectRoutine(ChainLink link, Card? source, int discards)
+    private IEnumerable<ChoiceRequest> ReplacedEffectRoutine(ChainLink link, Card? source, int discards, bool random)
     {
         if (source == null) yield break;
         var effect = new GodotGame.Core.Effects.Monster.MonsterEffect(GodotGame.Core.Effects.Monster.MonsterEffectType.Activation,
-            new[] { new EffectStep("discard", EffectActionParams.Of(("Who", "Opponent"), ("Count", discards.ToString()), ("Chooser", "Owner"))) });
+            new[] { new EffectStep("discard", EffectActionParams.Of(("Who", "Opponent"), ("Count", discards.ToString()), ("Chooser", random ? "Random" : "Owner"))) });
         var activation = new EffectActivation(source, effect, -1, link.Controller, new CardRef(source, link.Controller, CardZone.Graveyard, -1));
         foreach (var request in ResolveMonsterEffectRoutine(activation)) yield return request;
     }
@@ -1352,15 +1360,15 @@ public sealed partial class DuelEngine
 
         if (defenderDestroyed)
         {
-            CardMover.SendToGraveyard(State, new CardRef(defender.Card, defenderPlayer.Side, CardZone.MonsterZone, targetZone),
+            defenderDestroyed = CardMover.SendToGraveyard(State, new CardRef(defender.Card, defenderPlayer.Side, CardZone.MonsterZone, targetZone),
                 new MoveCause(CauseKind.Battle, attackerPlayer.Side, attacker.Card), destroy: true);
-            Log.Add($"{defender.Card.Name} es destruido.");
+            if (defenderDestroyed) Log.Add($"{defender.Card.Name} es destruido.");
         }
         if (attackerDestroyed)
         {
-            CardMover.SendToGraveyard(State, new CardRef(attacker.Card, attackerPlayer.Side, CardZone.MonsterZone, attackerZone),
+            attackerDestroyed = CardMover.SendToGraveyard(State, new CardRef(attacker.Card, attackerPlayer.Side, CardZone.MonsterZone, attackerZone),
                 new MoveCause(CauseKind.Battle, defenderPlayer.Side, defender.Card), destroy: true);
-            Log.Add($"{attacker.Card.Name} es destruido.");
+            if (attackerDestroyed) Log.Add($"{attacker.Card.Name} es destruido.");
         }
 
         // Aplicar daño.
