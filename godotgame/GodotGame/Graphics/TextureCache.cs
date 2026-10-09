@@ -1,5 +1,6 @@
 using Godot;
 using GodotGame.Core.Entities;
+using GodotGame.Data;
 
 namespace GodotGame.Graphics;
 
@@ -29,7 +30,7 @@ public sealed class TextureCache
 
     /// <summary>Textura de arte de una carta a partir de su nombre de archivo (<c>Card.Image</c>), o null si no hay archivo (carta sin imagen, o Image vacio).</summary>
     public Texture2D? CardArt(string image) =>
-        string.IsNullOrWhiteSpace(image) ? null : LoadFromFile(Path.Combine(_cardsDir, image));
+        string.IsNullOrWhiteSpace(image) ? null : LoadFromFile(ArtFiles.Resolve(_cardsDir, image));
 
     /// <summary>Insignia del Atributo de un Monstruo, o null si no hay archivo para ese Atributo.</summary>
     public Texture2D? AttributeIcon(MonsterAttribute attribute) =>

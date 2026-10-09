@@ -1,5 +1,6 @@
 using Godot;
 using GodotGame.Core.Entities;
+using GodotGame.Data;
 using GodotGame.Data.Loaders;
 
 namespace GodotGame.Editor.Controls;
@@ -185,7 +186,7 @@ public sealed partial class CardPreview : Control
     private Texture2D? LoadImage(string subfolder, string? fileName)
     {
         if (string.IsNullOrEmpty(ArtRoot) || string.IsNullOrWhiteSpace(fileName)) return null;
-        string path = Path.Combine(ArtRoot, subfolder, fileName);
+        string path = ArtFiles.Resolve(Path.Combine(ArtRoot, subfolder), fileName);
 
         if (_imageCache.TryGetValue(path, out var cached)) return cached;
 
